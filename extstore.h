@@ -40,6 +40,10 @@ struct extstore_stats {
     uint64_t write_failures;   /* RDMA WRITE completions with error status */
     uint64_t read_failures;    /* RDMA READ completions with error status */
     uint64_t engine_dead;      /* 0/1: a QP error shut the engine down (fail-fast) */
+    /* EXT_RDMA_PROF (D6): per-direction in-server span distribution, ns.
+     * Populated only when EXT_RDMA_PROF=1; reset by extstore_prof_reset. */
+    uint64_t prof_read_count,  prof_read_avg_ns,  prof_read_p50_ns,  prof_read_p99_ns;
+    uint64_t prof_write_count, prof_write_avg_ns, prof_write_p50_ns, prof_write_p99_ns;
     struct extstore_page_data *page_data;
 };
 
@@ -96,9 +100,10 @@ struct _obj_io {
     enum obj_io_mode mode;
     obj_io_cb cb;
     unsigned char retries; /* read retry count (torn-read / tag fail) */
-#ifdef EXT_RDMA_PROF
-    uint64_t t_submit, t_post, t_cqe, t_done; /* rdtsc spans */
-#endif
+    /* EXT_RDMA_PROF (runtime): D6 in-server span. t_start = before the
+     * SYNC_FOR_DEVICE advise (WRITE) or before ibv_post_send (READ); t_end =
+     * WRITE CQE reaped, or READ CQE + SYNC_FOR_CPU complete. rdtsc cycles. */
+    uint64_t t_start, t_end;
 };
 
 /* A remote object location. Returned by extstore_alloc, stored in item_hdr. */
@@ -133,6 +138,8 @@ void extstore_staging_put(void *ptr, char *slot);
 int extstore_check(void *ptr, unsigned int page_id, uint64_t page_version);
 int extstore_delete(void *ptr, unsigned int page_id, uint64_t page_version, unsigned int count, unsigned int bytes);
 void extstore_get_stats(void *ptr, struct extstore_stats *st);
+/* EXT_RDMA_PROF: clear the per-op span histograms (call at phase start). */
+void extstore_prof_reset(void *ptr);
 void extstore_get_page_data(void *ptr, struct extstore_stats *st);
 
 #endif

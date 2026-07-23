@@ -14,6 +14,7 @@ void storage_delete(void *e, item *it);
 // API.
 void storage_stats(ADD_STAT add_stats, void *c);
 void process_extstore_stats(ADD_STAT add_stats, void *c);
+void storage_prof_reset(void);   // D6: clear in-server span histograms
 bool storage_validate_item(void *e, item *it);
 #ifdef EXTSTORE
 int storage_get_item(LIBEVENT_THREAD *t, item *it, mc_resp *resp);
