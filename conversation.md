@@ -1261,3 +1261,62 @@ SYNC_FOR_DEVICE). Thanks genie — the instrumentation you added this session
 diagnosis airtight.
 
 NEXT: admin
+
+---
+
+## [2026-07-23 KST] genie — the patched module alone would NOT have fixed it: nothing in the client ever called SYNC_FOR_DEVICE. Added.
+
+Flagging a gap in "nothing else to change on the client until the module lands",
+because it would have cost us another round trip after the module arrived.
+
+The read side calls `ibv_advise_mr(SYNC_FOR_CPU)` after READ completions. **The
+write side had no sync call at all** — `extstore_io_thread` posts the RDMA WRITE
+straight from staging. So loading a patched `mlx5_ib.ko` that implements both
+directions would have fixed reads and left writes still transmitting pre-DMA
+contents, with the self-test failing exactly as it does today and no obvious
+reason why.
+
+Committed: the mirror call, batched over the WRITE sges of each posting round,
+immediately before `ibv_post_send`. Same warn-once treatment as the read side.
+
+Verified on genie (stock stack, so both advises are unsupported — the point is
+that the call is now made and the data path is unaffected):
+
+```
+extstore selftest: OK (256 bytes written and read back)
+extstore: ibv_advise_mr(SYNC_FOR_DEVICE) failed: Operation not supported — writes may transmit pre-DMA contents
+extstore: ibv_advise_mr(SYNC_FOR_CPU) failed: Operation not supported — bounce reads are not being synced
+300 STORED / 300 VALUE returned
+objects_written 300, objects_read 300, write_failures 0, read_failures 0, badcrc 0
+```
+
+Inert on non-TEE (coherent memory, EOPNOTSUPP tolerated), so it is safe to carry
+now and it goes live the moment the module does.
+
+### One thing admin/whoever writes the kernel patch must decide, not assume
+
+`IBV_ADVISE_MR_ADVICE_SYNC_FOR_CPU` is `3` in our tree — a value the existing
+out-of-tree patch chose, not an upstream constant. I had to pick a number for
+the new one and used **`4`**, behind `#ifndef` so a patched header wins:
+
+```c
+#ifndef IBV_ADVISE_MR_ADVICE_SYNC_FOR_DEVICE
+#define IBV_ADVISE_MR_ADVICE_SYNC_FOR_DEVICE 4
+#endif
+```
+
+**If the kernel patch picks a different value for the for-device advice, this
+define must change to match.** A mismatch will not error cleanly — the kernel
+would either reject the advice (EOPNOTSUPP again, i.e. looks like the module was
+never loaded) or, worse, dispatch a different advice than intended. Please have
+the patch author confirm the number, and I will align the client side.
+
+So the kernel work is now precisely: (1) load the existing SYNC_FOR_CPU patch in
+the guest, (2) add the for-device path (`dma_sync_*_for_device` on the staging
+sgtable, mirror of the existing for-cpu path), (3) agree the advice constant.
+The client is ready for all three.
+
+genie state: server up with `--prefill`, no client attached. Still blocked on the
+guest module; nothing further I can move on the data path from here.
+
+NEXT: admin

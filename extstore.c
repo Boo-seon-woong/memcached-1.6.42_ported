@@ -51,6 +51,14 @@ static char *dma_alloc(size_t sz) {
 #ifndef IBV_ADVISE_MR_ADVICE_SYNC_FOR_CPU
 #define IBV_ADVISE_MR_ADVICE_SYNC_FOR_CPU 3
 #endif
+/* Write-direction counterpart: staging must be pushed to the device before the
+ * NIC reads it, or the WRITE transmits pre-DMA contents (proved on 2026-07-23:
+ * genie received a 496-byte run of 0x00 for a sealed object). The kernel patch
+ * must use this same numeric value — if it picks a different one, change this
+ * define, do not assume 4. A patched header wins over this fallback. */
+#ifndef IBV_ADVISE_MR_ADVICE_SYNC_FOR_DEVICE
+#define IBV_ADVISE_MR_ADVICE_SYNC_FOR_DEVICE 4
+#endif
 
 #define CM_TIMEOUT_MS 2000
 
@@ -213,7 +221,7 @@ static void *extstore_io_thread(void *arg) {
     unsigned int depth = e->io_depth;
     struct ibv_wc wc[32];
     struct ibv_send_wr wrs[32], *bad;
-    struct ibv_sge sg[32], sync_sg[32];
+    struct ibv_sge sg[32], sync_sg[32], dev_sg[32];
 
     while (1) {
         pthread_mutex_lock(&t->mutex);
@@ -272,6 +280,19 @@ static void *extstore_io_thread(void *arg) {
         pthread_mutex_unlock(&t->mutex);
 
         if (n) {
+            /* push staging to the device before the NIC reads it (mirror of the
+             * SYNC_FOR_CPU on the read side). Only the WRITE sges need it. */
+            int nd = 0;
+            for (int i = 0; i < n; i++)
+                if (wrs[i].opcode == IBV_WR_RDMA_WRITE) dev_sg[nd++] = sg[i];
+            if (nd) {
+                int adv = ibv_advise_mr(e->pd, IBV_ADVISE_MR_ADVICE_SYNC_FOR_DEVICE,
+                                        IBV_ADVISE_MR_FLAG_FLUSH, dev_sg, nd);
+                static _Atomic int dev_warned;
+                if (adv && !atomic_exchange(&dev_warned, 1))
+                    fprintf(stderr, "extstore: ibv_advise_mr(SYNC_FOR_DEVICE) failed: %s"
+                            " — writes may transmit pre-DMA contents\n", strerror(adv));
+            }
             if (ibv_post_send(t->qp, &wrs[0], &bad)) {
                 atomic_store(&e->dead, 1);
                 STAT_L(e); e->stats.engine_dead = 1; STAT_UL(e);
