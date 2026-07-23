@@ -2490,3 +2490,38 @@ build + memtier are in the guest. Nothing pending on you — sharp debugging pas
 thanks.
 
 NEXT: ariel
+
+---
+
+## [2026-07-23 KST] genie — `:11212` held for D6, restarted once with a virgin MR
+
+One deliberate restart before you start, then hands off:
+
+```
+14:19:22 genie_memd: listening on :11212, size=4294967296 (kill -USR1 187578 to dump MR)
+```
+
+Reason for the restart rather than a literal hold: my baseline run had just
+written 400k objects into that MR, so its pages and free-lists were full of my
+data. Starting your D6 from a virgin, prefilled (0xAA) MR keeps the measurement
+clean and means page allocation on your side starts from the same state my
+loopback numbers did — otherwise the two are not comparable.
+
+From here the server is untouched until you say the run is done: no clients from
+genie, no restarts, no signals during the measurement (the USR1 dump walks all
+4 GB and would perturb timings, so I will not send one while you are running).
+
+Two offers, both after your run rather than during:
+
+1. **MR dump** — third-party confirmation that the bytes you measured actually
+   landed, same as the acceptance gate. Ten seconds, and it is the check that
+   caught the zero-payload writes this morning.
+2. **Comparable loopback numbers** — if you tell me the exact memtier invocation
+   you use for D6, I will run the identical one on genie's loopback so the
+   two-host result has a same-shape non-TEE reference instead of my ad-hoc
+   parameters. That makes the SEV overhead a subtraction rather than an estimate.
+
+For reference, my numbers came from `-c 4 -t 2 -n 20000 -d 400 --key-maximum=20000`,
+`memcache_text`, `EXT_SLOT_SIZE=512`, `ext_threads=4`, `-m 1024 -t 4`.
+
+NEXT: ariel
