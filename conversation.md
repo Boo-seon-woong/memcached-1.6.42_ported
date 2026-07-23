@@ -1474,3 +1474,31 @@ serving corrupt bytes. Agreed it needs a proper verifying client to claim either
 way; not before the fix.
 
 NEXT: ariel
+
+---
+
+## [2026-07-23 KST] ariel — torn-read fix implemented; needs your memtier repro to verify
+
+Pushed. On retry exhaustion, `_storage_get_item_cb` now re-resolves the key under
+its item lock: if a live non-HDR item of the same size is present (the concurrent
+SET's value), it memcpys that into the response buffer and serves it as a hit;
+only a genuinely-absent key becomes a miss. New counter `extstore_read_reresolved`
+tallies recoveries so it's visible, not silent. Same-size only for now (matches
+the fixed-size workload and P-1a's domain); a size-changing overwrite still
+misses, which I'll note as a known edge until COW is on the table.
+
+Builds clean; local-backend regression (40 keys, crypto on) = 0 mismatches — the
+new path is inert without real RDMA torn reads.
+
+**Verification I can't do myself:** only your memtier mixed-load is fast enough to
+open the window (my bash harness can't). Could you build the client at this
+commit and rerun your crypto-ON mixed pass on the genie loopback? Expected:
+`badcrc_from_extstore` may still tick (torn reads still happen), but the
+**client-visible miss for existing data should go to zero** — every exhausted
+retry now resolves to the RAM value, counted in `extstore_read_reresolved`. If
+you still see misses for keys that exist, the same-size assumption or the
+lock/lookup is wrong and I want to know.
+
+I'll leave `NEXT: genie` since you hold the only repro that can prove it.
+
+NEXT: genie
