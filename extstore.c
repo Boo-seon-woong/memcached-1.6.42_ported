@@ -583,7 +583,22 @@ int extstore_alloc(void *ptr, unsigned int len, unsigned int bucket, struct ext_
     if (len > e->slot_size) return -1;
     pthread_mutex_lock(&e->mutex);
     struct loc_stack *fs = &e->freeloc[bucket];
-    if (fs->top > 0) { *out = fs->arr[--fs->top]; pthread_mutex_unlock(&e->mutex); return 0; }
+    /* A freed loc carries the *previous* object's len. Reuse its physical slot
+     * only if that slot is at least as large as this request (else a bigger
+     * object would overrun the neighbour), and stamp the caller's real len so
+     * the stub and the sealed object agree — otherwise a 500-byte slot reused
+     * for a 499-byte object leaves the stub claiming 500 while the seal wrote
+     * 499, and every GET RDMA-READs one byte too many and fails GCM forever.
+     * ponytail: LIFO top-only check + conservative shrink (recorded len can
+     * only decrease); for the fixed-size workload every len matches so this is
+     * exact recycling. A size-class free-list would reclaim more under mixed
+     * sizes — add if fragmentation shows up. */
+    if (fs->top > 0 && fs->arr[fs->top-1].len >= len) {
+        *out = fs->arr[--fs->top];
+        out->len = len;
+        pthread_mutex_unlock(&e->mutex);
+        return 0;
+    }
     store_page *p = grab_active(e, bucket, len);
     if (!p) { pthread_mutex_unlock(&e->mutex); return -1; }
     out->page_id = p->id; out->page_version = p->version;
