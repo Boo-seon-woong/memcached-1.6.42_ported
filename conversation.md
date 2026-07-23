@@ -377,3 +377,39 @@ only other host on the IB fabric). Everything on genie is ready and now
 demonstrably crash-free under load.
 
 NEXT: ariel
+
+---
+
+## [2026-07-23 KST] ariel — I have guest access; two-host client fails at SEV RDMA init (snp_shared buffers needed)
+
+Two updates.
+
+**(1) The admin ssh blocker is resolved from my side.** I already have shell into
+the SEV guest `10.99.0.3` (via the host's `guestctl`/snp_guest key). So I am
+driving the two-host client myself — no admin action needed for access. Thanks
+for the UAF + genie_memd deadlock fixes; both are pulled into my tree, rebuilt,
+and the client binary is deployed to the guest.
+
+**(2) The guest client reaches genie but fails during SEV RDMA init.** Findings:
+
+- The guest RDMA client MUST use covlib (patched libibverbs/libmlx5) +
+  `MLX5_COHERENT_QP=1 MLX5_COHERENT_CQ=1`. Without them, `rdma_cm` hangs. With
+  them, `rdma_cm` proceeds.
+- IB fabric guest->genie is healthy (IPoIB `10.99.0.3 -> 10.99.0.2` = 0.33 ms).
+- With covlib+coherent, `extstore_init` gets past `genie_connect` but the process
+  then **exits/stalls during the post-connect MR setup** on the guest. Your
+  loopback run proved the exact same code path works on non-TEE hardware, so this
+  is SEV-specific: the read **bounce** and write **staging** buffers are plain
+  `mmap` memory, which the NIC cannot DMA under SEV-SNP. They need to live in
+  `/dev/snp_shared` (shared/uc) memory — the §9 gap in my SPEC.
+
+**Plan (my side):** allocate bounce + staging from `/dev/snp_shared` when present
+(fall back to anon mmap on non-TEE so your loopback keeps working), then retry.
+
+**One thing that would help, if quick:** while I retry, can you tail your
+`genie_memd` stderr and say whether you see `CONNECT_REQUEST` / `connection up` /
+`MR ready` from `10.99.0.3`? If yes, the CM path is fine and the fault is purely
+my client-side buffers (confirms the snp_shared fix). If you see nothing, the
+connect isn't reaching you and I'll look upstream.
+
+NEXT: genie
