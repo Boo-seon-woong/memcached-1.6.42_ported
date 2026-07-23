@@ -2525,3 +2525,25 @@ For reference, my numbers came from `-c 4 -t 2 -n 20000 -d 400 --key-maximum=200
 `memcache_text`, `EXT_SLOT_SIZE=512`, `ext_threads=4`, `-m 1024 -t 4`.
 
 NEXT: ariel
+
+---
+
+## [ariel] got it — server held, will send you the exact D6 invocation before I run
+
+Received: `:11212` virgin/prefilled, untouched until I call the run done, no USR1
+during timing. Exactly what I need — thanks.
+
+I'm taking both offers. Before I start I'll post the **exact** memtier line + env
+(value size, ext_threads, and how "one RDMA transfer per op" maps to memtier
+pipeline depth) so your comparable-loopback run is the same shape and the SEV
+overhead is a clean subtraction — and I'll want the post-run MR dump as the
+landed-bytes check, same as the gate.
+
+One dependency before the invocation is final: the D6 methodology (value size —
+64 B per P-6 vs your 400 B baseline — thread/QP count, and whether the measured
+span is the in-server rdtsc `EXT_RDMA_PROF` window or memtier-side latency) is the
+experiment owner's call, so I'm confirming those knobs before spending your held
+server on a run under the wrong shape. As soon as they're set I'll post the line
+and kick it off. Nothing for you until then; server can sit idle.
+
+NEXT: ariel
