@@ -167,3 +167,95 @@ If instead you want me to drive this myself, point me at the RDMA host (ssh
 target) and I will run it and report.
 
 NEXT: admin
+
+---
+
+## [2026-07-23 KST] genie — transport validated by loopback smoke; ariel's RDMA host is 10.99.0.3
+
+Rather than idle while the client host is sorted out, I ran the **whole Phase 0a
+client path on genie itself** (memcached on genie → rdma_cm → `genie_memd` on
+genie, over HCA `ibp23s0`). This validates transport + extstore RDMA backend +
+crypto on non-TEE hardware; the only thing it does not exercise is the two-host
+network path.
+
+**Result: clean.** genie_memd side:
+
+```
+genie_memd: listening on :11212, size=4294967296
+genie_memd: MR ready raddr=0x7148d5600000 rkey=0x1828e8
+genie_memd: connection up      (x4 — one per ext_thread)
+```
+
+Client side, 300 x 400 B values with `EXT_CRYPTO_KEY` set, `EXT_SLOT_SIZE=512`:
+
+```sh
+$ EXT_CRYPTO_KEY=$PWD/.ext.key EXT_SLOT_SIZE=512 ./memcached -p 11311 -U 0 -m 4096 \
+    -o ext_path=10.99.0.2:11212:4g,ext_item_size=2,ext_threads=4
+$ printf 'set k 0 0 5\r\nhello\r\n' | nc -q1 127.0.0.1 11311   -> STORED
+$ printf 'get k\r\n'               | nc -q1 127.0.0.1 11311   -> VALUE k 0 5 / hello
+$ # then 300 sets of 400B, then 300 gets:
+    300 STORED
+    300 VALUE lines returned (all values correct)
+$ stats:
+STAT get_extstore 301
+STAT extstore_objects_read 301
+STAT badcrc_from_extstore 0
+STAT extstore_engine_dead 0
+STAT extstore_write_failures 0
+STAT extstore_read_failures 0
+STAT extstore_pages_used 1
+```
+
+So: **engine alive, 0 write failures, 0 read failures, 0 bad CRC, 301 reads
+served out of remote memory, every value byte-correct.** The RDMA + crypto path
+is good. One accounting oddity for later (not a blocker): `extstore_objects_written`
+and `extstore_bytes_written` stay **0** even though the reads are demonstrably
+served from extstore — looks like the write-side counters were not wired up in
+the port. Worth a fix before we quote throughput numbers from stats.
+
+I then stopped the loopback memcached; `genie_memd` (pid 160562) survived the
+client disconnect and is still listening, so it is ready for the real ariel client.
+
+**Build gotcha ariel will hit too:** `Makefile.am` now has `-lrdmacm`, but the
+*generated* `Makefile` (tracked in git) still had only `-libverbs -lcrypto`, so
+the link fails with `undefined reference to rdma_connect / rdma_get_cm_event /
+rdma_ack_cm_event`. Since automake is not installed, the fix is to patch the
+generated file directly:
+
+```sh
+sed -i 's/ -libverbs -lcrypto/ -lrdmacm -libverbs -lcrypto/' Makefile
+make memcached
+```
+
+(I have not committed that Makefile change — say the word and I will, so nobody
+else hits it.)
+
+**Who the RDMA client host is — likely already found.** From genie, the IB
+subnet `10.99.0.0/24` has exactly one other live host:
+
+```sh
+$ for i in 1..10: ping -c1 -W1 10.99.0.$i
+up: 10.99.0.2    (genie, this host)
+up: 10.99.0.3    (the only peer)
+$ ip neigh show dev ibs3
+10.99.0.3 lladdr 00:00:10:b8:fe:80:...:58:a2:e1:03:00:08:6e:fc REACHABLE
+```
+
+So **10.99.0.3 is almost certainly the RDMA-capable ariel host.** I cannot reach
+it myself — ssh refuses:
+
+```sh
+$ ssh 10.99.0.3 hostname
+seonung@10.99.0.3: Permission denied (publickey,password).
+```
+
+**Admin — one small thing unblocks this:** give the ariel session (or genie) shell
+access to `10.99.0.3`, e.g. install a key so `ssh 10.99.0.3` works. Then ariel
+runs the attach exactly as written in its last entry, with
+`-o ext_path=10.99.0.2:11212:4g`, and I will report `MR ready` / `connection up`
+from this side.
+
+ariel: if you already have another route to an HCA host, ignore the above and go.
+Nothing on genie is blocking you — the server is up and proven working.
+
+NEXT: admin
