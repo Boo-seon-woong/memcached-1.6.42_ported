@@ -2884,3 +2884,73 @@ Server held virgin at `:11212`, no clients. Post the invocation when the spans
 land and I will mirror it on loopback immediately after your run.
 
 NEXT: ariel
+
+---
+
+## [2026-07-24 KST] admin — going offline. Standing authorization: keep sweeping after D6, do not wait on me.
+
+I am asleep for the night, so nothing addressed to admin will get an answer for a
+while. Rather than have the server sit idle behind an approval that is not coming,
+here is a standing authorization for the rest of the run.
+
+**Do not stop when the twelve D6 phases are done.** Continue measuring on your own
+judgement, extending the parameter space along the three axes below, and post each
+result as it lands. Between the two of you, use `NEXT: ariel` / `NEXT: genie`
+normally — just do not park anything on `NEXT: admin` and wait.
+
+### Axes you may vary freely
+
+1. **QP count (`ext_threads`)** — the planned 16/32/64/128 is the middle of the
+   range, not the whole of it. Extend downward (1/2/4/8) to find where the curve
+   starts to bend, and upward past 128 if 128 is still scaling. genie has already
+   shown the memory node accepts 128 with headroom to spare (`max_qp 131072`), so
+   the ceiling to discover is the client's, not the server's.
+2. **memcached worker threads (`-t`)** — 16 is one point. 4 / 8 / 32 tell us
+   whether the QP sweep result is a property of the RDMA path or just of the
+   worker/QP ratio. The x1/x2/x4/x8 relation was defined against `-t 16`; keeping
+   the *ratio* while moving the base is the more interesting comparison.
+3. **memtier client shape (`-t` x `-c`)** — 16x12 = 192 connections is one load
+   point. Vary offered load (e.g. 4x4, 8x8, 16x24) to separate "the remote path
+   saturates" from "the client saturates". This matters for reading the throughput
+   numbers correctly.
+
+Combinations are yours to choose. Prefer breadth over exhaustiveness — a coarse
+grid across all three axes is worth more to me in the morning than one axis
+swept to death.
+
+### Keep these fixed — they define comparability
+
+Value size 64 B, crypto ON, `EXT_SLOT_SIZE=256`, 10M keys, pipeline depth 1, and
+above all **the span definition** (SET: before SYNC_FOR_DEVICE → WRITE CQE; GET:
+before post_send → SYNC_FOR_CPU complete; crypto outside both). If any of these
+moves, the new points stop being comparable with the D6 set and with genie's
+loopback mirror. If you have a reason to change one, take the measurement both
+ways rather than switching.
+
+### Still needs me — park it, do not proceed
+
+- Kernel or module changes (the mlx5_ib work is done; nothing further is
+  authorized tonight).
+- Storage-model changes — COW, reversing P-1a in-place, the size-class free-list.
+  If `mixed-size-stress.sh` shows page growth, **report it, do not fix it**.
+- Anything destructive to the guest or to genie beyond restarting `genie_memd`
+  and memcached.
+
+### Operating notes for an unattended night
+
+- genie: restart `genie_memd` virgin between sweep points as agreed, and mirror
+  each invocation on loopback so every SEV number keeps its non-TEE reference.
+- If a configuration fails — allocation failures, `badcrc` nonzero, `curr_items`
+  below the preloaded count, a QP count that will not establish — **stop that
+  point, record what happened, and move to the next one.** Do not spend the night
+  debugging a single bad cell; a gap in the grid with an explanation is a fine
+  result.
+- Run `tools/mixed-size-stress.sh` after the D6 twelve, as already agreed, and
+  report the `pages_used` trend without acting on it.
+- Post an MR dump at the end of the session as the landed-bytes check.
+
+Leave a short summary table at the top of your final entry — sweep point, phase,
+in-server avg/p50/p99 per direction, memtier ops/s — so I can read the shape of
+the night in one screen before going through the detail.
+
+Good hunting. NEXT: ariel
