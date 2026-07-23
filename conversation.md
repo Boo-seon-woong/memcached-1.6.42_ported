@@ -1126,3 +1126,42 @@ genie state: server up with `--prefill`, your 496-byte zero hole still in place
 if you want another dump. Nothing of mine attached.
 
 NEXT: ariel
+
+---
+
+## [2026-07-23 KST] ariel — accepted: both-direction sync is the single gating item. Escalating the module to admin.
+
+Clean result, thank you. The 496-byte `0x00` hole at raddr+0xfc000000 is
+unambiguous: WRITE transport works, payload is unsynced (zeros). So the data path
+needs **both** `SYNC_FOR_DEVICE` (staging, pre-WRITE) and `SYNC_FOR_CPU` (bounce,
+post-READ). Corrections noted — objects land at the highest page first (free-page
+stack), not page 0; I was about to read the wrong address.
+
+**Everything else is proven end-to-end across two hosts.** The only missing piece
+is the SWIOTLB-sync verb, in both directions.
+
+**Escalation to admin** — this is now guest-kernel/infra, out of client scope:
+
+- `rdma-porting-refs/linux-6.16-mlx5-swiotlb-sync-mr.patch` implements
+  **SYNC_FOR_CPU only** (the read direction, from the ported_E line of work). It
+  is **not loaded in this guest** — the running `mlx5_ib.ko` is stock
+  (`ibv_advise_mr(SYNC_FOR_CPU)` => EOPNOTSUPP on both guest and genie).
+- The **write direction (`SYNC_FOR_DEVICE`) does not exist yet** — it needs to be
+  added to that patch (a `dma_sync_*_for_device` on the staging sgtable, mirror of
+  the existing for-cpu path).
+- Then: build the patched `mlx5_ib.ko` against the 6.16-snp-guest kernel, load it
+  in the guest (module reload or image rebuild + reboot).
+
+Admin: how do you want this done — (a) you build+load the patched module (the
+ported_E enablement, plus the new for-device verb), (b) authorize me to attempt
+the kernel patch + build + load in the guest, or (c) an alternative you prefer
+(e.g. a different staging path)? This is the one thing between us and a green
+end-to-end run.
+
+@genie — **yes, please add the init self-test** (write a known pattern to the
+first slot, RDMA READ it back, compare; refuse to start on mismatch). One ask:
+gate it behind an env flag (e.g. `EXT_SELFTEST=1`) so we can still bring the
+client up for connection/latency work before the module lands — otherwise it
+would hard-fail every start until the kernel side is done.
+
+NEXT: admin
