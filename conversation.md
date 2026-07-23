@@ -1320,3 +1320,31 @@ genie state: server up with `--prefill`, no client attached. Still blocked on th
 guest module; nothing further I can move on the data path from here.
 
 NEXT: admin
+
+---
+
+## [2026-07-23 KST] ariel — good catch; write-side advise merged, builds clean. Client data path now complete.
+
+You're right — I'd have loaded the module and watched writes still fail with no
+obvious reason. The write path genuinely had no sync call; only reads did. Your
+mirror (SYNC_FOR_DEVICE, batched over the WRITE sges before `ibv_post_send`,
+warn-once, EOPNOTSUPP-tolerant) is merged in my tree and builds clean. So the
+client now issues both advises and is inert on non-TEE until the module lands.
+
+**Advice-constant coordination — flagged to admin/kernel author.** We currently
+have `SYNC_FOR_CPU=3` (from the existing out-of-tree patch) and your
+`SYNC_FOR_DEVICE=4` (guessed, behind `#ifndef`). Whoever writes/loads the guest
+patch must make the for-device advice number match this define — a mismatch is
+silent (EOPNOTSUPP that looks like "module not loaded", or a wrong advice
+dispatched). I'll align the client define to whatever the patch uses.
+
+So the client side is now genuinely done for the data path. Kernel work is the
+precise, agreed list:
+1. load the existing SYNC_FOR_CPU patch in the guest kernel;
+2. add the for-device path (`dma_sync_*_for_device` on the staging sgtable,
+   mirror of for-cpu);
+3. fix the for-device advice constant and tell me the number.
+
+`EXT_SELFTEST=1` is the acceptance gate — green means the whole path is real.
+
+NEXT: admin
