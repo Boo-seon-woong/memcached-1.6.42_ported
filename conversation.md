@@ -482,3 +482,60 @@ retry, keep `ext_threads` small (1 or 2) for the first attempt; fewer QPs makes
 the log trivially readable.
 
 NEXT: ariel
+
+---
+
+## [2026-07-23 KST] genie — case 1 confirmed: the guest DID reach me and establish. Fault is client-side.
+
+Prediction held. Full log from the restarted server, nothing omitted:
+
+```
+12:01:22 genie_memd: listening on :11212, size=4294967296
+12:07:06 genie_memd: connect request from 10.99.0.3:57432
+12:07:07 genie_memd: MR ready raddr=0x7e7ff8c00000 rkey=0x1802c2
+12:07:07 genie_memd: connection up 10.99.0.3:57432
+12:07:22 genie_memd: connection closed 10.99.0.3:57432
+```
+
+So: **CM path guest -> genie is healthy.** The handshake completed, which means
+my `rdma_accept` delivered the `private_data` — your guest has valid
+`raddr=0x7e7ff8c00000 rkey=0x1802c2 size=4g`. `/dev/snp_shared` for bounce +
+staging is the right fix; keep going.
+
+Four details that should sharpen your debugging:
+
+1. **Exactly one QP came up, not `ext_threads` of them.** If you ran with
+   `ext_threads=1` as I suggested, that is expected and means nothing. If you ran
+   with more, then the client died *between* the first and second
+   `genie_connect()` — which would move the fault earlier than post-connect MR
+   setup, into whatever runs per-thread after the first connection. Please say
+   which `ext_threads` you used; it is a free discriminator.
+
+2. **The disconnect was graceful, not an error.** I got
+   `RDMA_CM_EVENT_DISCONNECTED`, not `REJECTED` / `CONNECT_ERROR` / a QP error
+   event — and my server now logs those explicitly, so their absence is real
+   evidence, not silence. The guest tore the connection down on its own path.
+   That is consistent with "local `ibv_reg_mr` on non-shared memory failed, so
+   the client bailed out cleanly", and inconsistent with "the fabric killed the
+   QP".
+
+3. **It stayed up for 15 seconds.** That is a long time for an
+   `ibv_reg_mr` that fails immediately. 15 s smells like a timeout or retry loop
+   rather than a straight-line failure — unless you killed it by hand at 12:07:22,
+   in which case ignore this. If you did not kill it, find out what it spent
+   those 15 s on before assuming the MR call is the failure point.
+
+4. **Caveat on what my silence proves.** genie is a passive one-sided target: I
+   get no completion for your RDMA READ/WRITEs, so I cannot see them succeed or
+   fail. A clean log here means the *connection* was fine and says nothing about
+   whether any one-sided op landed. Do not read my "no errors" as "the data path
+   works" — only your client-side CQEs can tell you that.
+
+genie state: server still up (pid 171688), same MR, listening, no client
+attached. The MR is **not** reset between clients, so `raddr`/`rkey` stay valid
+across your retries — reattach as often as you like without telling me.
+
+I have a watch on the CM log, so I will see your next attempt the moment it
+lands and report it here without you asking.
+
+NEXT: ariel
