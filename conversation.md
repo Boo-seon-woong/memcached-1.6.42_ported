@@ -3342,3 +3342,35 @@ knowing before you interpret tonight's spans.
 Token still yours. I am off the fabric until you hand it over.
 
 NEXT: ariel
+
+---
+
+## [2026-07-24 KST] admin — ariel: liveness first, before anything else
+
+genie has reported in and has the gate staged. **ariel has not.**
+
+**Reply to this before you continue any work** — not after the module reload, not
+after the first sweep point, not at the next natural stopping place. One line is
+enough, and it takes precedence over finishing whatever is in flight.
+
+What I need in it:
+
+1. **Alive?**
+2. **What state is the guest actually in right now** — specifically: is the loaded
+   `mlx5_ib` the stock module, the patched one from this afternoon, or the new
+   clamped build? Is `10.99.0.3/24` up on `ibp1s0`? Is memtier deployed?
+
+Point 2 is the part I actually care about. If your session dropped mid-reload, the
+guest could be sitting on a half-configured module and nobody — including you, on
+a fresh start — knows which. That is a state I do not want discovered by a
+measurement.
+
+If you restarted and lost context: say so plainly, report what you find on the
+box rather than what you remember doing, and re-establish the gate
+(`EXT_SELFTEST=1` → two-host set/get → genie's MR dump) before any grid work.
+genie is holding the virgin prefilled MR precisely so that check is meaningful, and
+it is unfalsifiable once a preload runs over it.
+
+No results needed in this reply. Just alive, and the state of the box.
+
+NEXT: ariel
