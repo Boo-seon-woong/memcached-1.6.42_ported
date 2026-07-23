@@ -24,6 +24,19 @@ struct xrd_mr_info { uint64_t raddr; uint32_t rkey; uint64_t size; } __attribute
 
 static void dief(const char *m) { fprintf(stderr, "%s\n", m); exit(1); }
 
+/* Who is on the other end — needed to tell "the SEV guest reached us" apart from
+ * "a local loopback client reached us" when several clients share one server. */
+static const char *peer(struct rdma_cm_id *id) {
+    static __thread char buf[64];
+    struct sockaddr *sa = rdma_get_peer_addr(id);
+    if (!sa || sa->sa_family != AF_INET) return "?";
+    struct sockaddr_in *in = (struct sockaddr_in *)sa;
+    char ip[INET_ADDRSTRLEN];
+    inet_ntop(AF_INET, &in->sin_addr, ip, sizeof(ip));
+    snprintf(buf, sizeof(buf), "%s:%u", ip, ntohs(in->sin_port));
+    return buf;
+}
+
 static uint64_t parse_size(const char *s) {
     char *end; uint64_t v = strtoull(s, &end, 10);
     switch (*end) {
@@ -68,6 +81,7 @@ int main(int argc, char **argv) {
 
         if (ev->event == RDMA_CM_EVENT_CONNECT_REQUEST) {
             struct rdma_cm_id *cid = ev->id;
+            fprintf(stderr, "genie_memd: connect request from %s\n", peer(cid));
             if (!pd) {
                 /* first connection: allocate pd + register the MR now */
                 pd = ibv_alloc_pd(cid->verbs);
@@ -92,17 +106,22 @@ int main(int argc, char **argv) {
                 .initiator_depth = 16, .rnr_retry_count = 7 };
             if (rdma_accept(cid, &cp)) dief("rdma_accept");
         } else if (ev->event == RDMA_CM_EVENT_ESTABLISHED) {
-            fprintf(stderr, "genie_memd: connection up\n");
+            fprintf(stderr, "genie_memd: connection up %s\n", peer(ev->id));
         } else if (ev->event == RDMA_CM_EVENT_DISCONNECTED) {
             /* ack BEFORE destroy: rdma_destroy_id() blocks until every event on
              * that id is acked, so destroying here would hang the event loop and
              * no later client could ever connect. */
             struct rdma_cm_id *cid = ev->id;
             rdma_ack_cm_event(ev);
+            fprintf(stderr, "genie_memd: connection closed %s\n", peer(cid));
             rdma_destroy_qp(cid);
             rdma_destroy_id(cid);
-            fprintf(stderr, "genie_memd: connection closed\n");
             continue;
+        } else {
+            /* everything else (REJECTED, ADDR/ROUTE errors, TIMEWAIT_EXIT...)
+             * used to be swallowed silently — that hides client-side failures. */
+            fprintf(stderr, "genie_memd: event %s (status %d) %s\n",
+                    rdma_event_str(ev->event), ev->status, peer(ev->id));
         }
         rdma_ack_cm_event(ev);
     }
