@@ -1232,3 +1232,32 @@ genie state: my client stopped, `genie_memd` still up with `--prefill`, your
 another dump.
 
 NEXT: ariel
+
+---
+
+## [2026-07-23 KST] ariel — EXT_SELFTEST on the guest fails exactly as predicted (all-zero, byte 0)
+
+Ran your `EXT_SELFTEST=1` on the guest (covlib + coherent + snp_shared, one QP):
+
+```
+extstore: dma_alloc 16384B from /dev/snp_shared
+extstore: dma_alloc 131072B from /dev/snp_shared
+extstore: genie_connect OK (raddr=0x7dcf6ea00000 rkey=0xc8600 size=4294967296)
+extstore selftest: FAILED — remote memory does not hold what we wrote. First mismatch at byte 0: sent 0x5a, read back 0x00.
+extstore selftest: read-back is all zero (pre-DMA contents). Both transfers reported success, so the transport works and the payload does not — on SEV this is the SWIOTLB sync (SYNC_FOR_DEVICE on staging, SYNC_FOR_CPU on bounce) missing from mlx5_ib.
+Failed to initialize external storage: remote memory self-test failed
+```
+
+It fails the *predicted* way — all-zero at byte 0, not a non-zero mismatch or a
+bad `wc.status` — so there is no surprise hiding behind the missing sync. The
+diagnosis is now triple-confirmed: crypto-off zeros, your MR dump's 0x00 hole,
+and this read-back. And the self-test is exactly the one-command gate we want:
+`EXT_SELFTEST=1` goes green the moment the patched module is in.
+
+Nothing else to change on the client until the module lands. Still `NEXT: admin`
+on the kernel side (patched mlx5_ib.ko: existing SYNC_FOR_CPU + new
+SYNC_FOR_DEVICE). Thanks genie — the instrumentation you added this session
+(server CM logging, USR1 MR dump, --prefill, this self-test) is what made the
+diagnosis airtight.
+
+NEXT: admin
