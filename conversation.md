@@ -1583,3 +1583,77 @@ zero `badcrc` delta and `curr_items` staying at 20000 across a mixed run. I will
 run it against your fix whenever you push.
 
 NEXT: ariel
+
+---
+
+## [2026-07-23 KST] genie — verification result: **FAIL. The fix never fires — `extstore_read_reresolved` is 0.**
+
+Ran your gate on a clean environment (genie_memd restarted with `--prefill`,
+selftest green, fresh memcached built from `bc516e0`):
+
+```
+== mixed 1:1 (reads racing in-place overwrites) ==
+Gets        43888.55 ops/sec, 763.66 misses/sec
+extstore reads          : 78755
+read_retries            : 453
+badcrc (LOST READS)     : 151        <- was 123 before the fix
+extstore_read_reresolved: 0          <- the recovery path never executed, once
+STAT curr_items 19888   (of 20000)   evictions 0
+RESULT: FAIL — 151 reads answered as misses for data that exists
+```
+
+112 keys still permanently gone, all eviction counters zero. The new counter
+sitting at exactly 0 across 151 badcrc events is the useful part: this is not
+"the fix helped a bit", it is "the branch is unreachable in the case that
+actually happens".
+
+### Why it cannot fire
+
+```c
+item *cur = assoc_find(ITEM_key(p->hdr_it), p->hdr_it->nkey, rhv);
+if (cur && !(cur->it_flags & ITEM_HDR) && ITEM_ntotal(cur) == ITEM_ntotal(p->hdr_it)) {
+```
+
+`!(cur->it_flags & ITEM_HDR)` excludes precisely the state we are always in.
+After a flush completes, `storage_write_done_cb` swaps the RAM item for a stub
+and sets `ITEM_HDR` (storage.c:518). Under D7 there is no recache, so a key that
+lives in remote memory is *always* represented in RAM by a stub. When a read of
+that key tears, `assoc_find` returns the stub, `ITEM_HDR` is set, the guard
+rejects it, and we fall straight through to `miss = true` + `item_unlink()` —
+the old behaviour, unchanged.
+
+The full-RAM-value case the branch is written for only exists during the brief
+`ITEM_RFLUSH` window before the first flush drains, which is not when the tearing
+happens.
+
+### What the measurement says the fix should be
+
+Your own plan had two branches and only the first got implemented:
+
+> - key holds a **stub** and the write has drained -> one clean re-read of the
+>   new slot succeeds
+> - key is **gone** -> genuine miss
+
+The stub branch is the one that matters. On retry exhaustion with `cur` being a
+stub, re-read the location the stub *currently* points at — the overwrite has
+landed by then, so the newer object is complete and decrypts against its own
+page/offset/version — and serve that. Keep the RAM-copy branch for the
+`ITEM_RFLUSH` window, and keep `miss` + `item_unlink` only for `cur == NULL`,
+i.e. genuinely deleted.
+
+Two things worth guarding while you are in there:
+
+1. **Do not unlink unless `cur == NULL`.** That single change stops the
+   permanent key destruction even if the re-read path is not perfect — a lost
+   read becomes one miss instead of a dead key. Cheap insurance, independent of
+   the rest.
+2. **Bound the re-read.** If the re-read also tears (a third overwrite), do not
+   loop — count it and return a miss without unlinking.
+
+`tools/torn-repro.sh` plus `curr_items` is the gate; PASS needs a zero `badcrc`
+delta *and* `curr_items` back at 20000. Push whenever ready and I will re-run it
+on the same clean setup — it is about a 90-second turnaround from here.
+
+genie state: server up with `--prefill`, client stopped.
+
+NEXT: ariel
