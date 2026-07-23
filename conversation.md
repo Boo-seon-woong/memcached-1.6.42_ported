@@ -4,9 +4,14 @@ Fresh coordination channel for the extstore **RDMA remote-memory** port. This
 repo IS the code; genie builds directly from it. Append-only log.
 
 Convention:
-- Each entry ends with exactly one `NEXT: genie` / `NEXT: ariel` / `NEXT: none`.
-- Commit prefixes: `[ariel]` / `[genie]`. Pull before writing.
+- Each entry ends with exactly one `NEXT: genie` / `NEXT: ariel` / `NEXT: none` / `NEXT: admin`.
+- Commit prefixes: `[ariel]` / `[genie]` / `[admin]`. Pull before writing.
 - Report commands as fenced code blocks with their key output (not just prose).
+- **ariel runs a persistent watcher and replies to every result report, admin
+  question, or work request.** When ariel needs an approval/permission decision
+  (anything risky, destructive, or outside the agreed plan), it asks here with
+  `NEXT: admin` instead of blocking on an interactive prompt. Approval requests
+  are kept to a minimum.
 
 Roles:
 - **ariel** — SEV guest / non-TEE host; runs memcached (KVS compute + RDMA client).
@@ -105,3 +110,60 @@ Go ahead and attach memcached; I will report the `MR ready raddr=/rkey=` line
 from this side as soon as your client connects.
 
 NEXT: ariel
+
+---
+
+## [2026-07-23 KST] ariel — memory node confirmed; client host has no RDMA HCA
+
+Confirmed genie is up: listening on `10.99.0.2:11212` (4g), HCA `ibp23s0`
+InfiniBand `PORT_ACTIVE`, passive as expected. Connect address noted
+(`10.99.0.2`, not the mgmt subnet).
+
+**Blocker for the client attach:** the host running this ariel session has **no
+RDMA device**, so it cannot be the RDMA client:
+
+```sh
+$ ibv_devinfo -l
+0 HCAs found:
+```
+
+The memcached RDMA client (`rdma_cm` → genie's IB fabric) must run on the
+RDMA-capable ariel host (the one with an HCA on the same InfiniBand fabric as
+genie, e.g. `ibp193s0`), not this box.
+
+**Admin: please run the Phase 0a client on the RDMA host** (or grant this
+session access to it). The build + attach + smoke, from a clone of this repo:
+
+```sh
+cd ~/2026/memcached-1.6.42_ported
+git pull
+make memcached        # if autotools tries to regen (1.17 vs 1.16 mismatch), run:
+# touch configure.ac; sleep 1; touch aclocal.m4 Makefile.am; sleep 1; \
+# touch configure config.h.in Makefile.in; sleep 1; \
+# touch config.status config.h Makefile stamp-h1; make memcached
+
+head -c 32 /dev/urandom > .ext.key     # crypto-on (omit EXT_CRYPTO_KEY for the off ablation)
+EXT_CRYPTO_KEY=$PWD/.ext.key EXT_SLOT_SIZE=512 \
+  ./memcached -p 11211 -U 0 -m 4096 \
+  -o ext_path=10.99.0.2:11212:4g,ext_item_size=2,ext_threads=4
+```
+
+Then, in another shell, the smoke (value ≤ ~480 B so it fits `ext_slot_size`):
+
+```sh
+printf 'set k 0 0 5\r\nhello\r\n' | nc -q1 127.0.0.1 11211      # -> STORED
+sleep 0.3
+printf 'get k\r\n'               | nc -q1 127.0.0.1 11211      # -> VALUE k 0 5 / hello
+printf 'stats\r\nquit\r\n'       | nc  127.0.0.1 11211 | \
+  grep -E 'extstore_engine_dead|extstore_write_failures|extstore_read_failures|get_extstore|badcrc_from_extstore'
+```
+
+Success = server starts (genie logs `MR ready raddr=/rkey=`), GET returns
+`hello`, and `extstore_engine_dead 0`, `write_failures 0`, `read_failures 0`,
+`get_extstore ≥ 1`, `badcrc_from_extstore 0`. Paste that output here and I will
+interpret it (any nonzero failure counter tells us exactly which layer broke).
+
+If instead you want me to drive this myself, point me at the RDMA host (ssh
+target) and I will run it and report.
+
+NEXT: admin
