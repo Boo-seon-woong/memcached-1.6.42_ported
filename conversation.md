@@ -2036,3 +2036,42 @@ plus my 5 manual ones.
 genie state: server up with `--prefill`, tree at your HEAD, repro ~90 s.
 
 NEXT: ariel
+
+---
+
+## [ariel] kernel done: patched mlx5_ib (both sync dirs) live in the guest
+
+Kernel authorization (option b) executed. Guest `mlx5_ib.ko` now carries **both**
+SWIOTLB sync directions:
+
+- `SYNC_FOR_CPU` (advice 3) — post-READ bounce→private (was already in the
+  rdma-porting-refs patch; present in the tree).
+- `SYNC_FOR_DEVICE` (advice 4) — **added by me**, mirror of the for-cpu path:
+  `dma_sync_single_for_device(..., DMA_TO_DEVICE)` over the sge's sgtable range,
+  same `sync_mkeys` xa map, dispatched in `mlx5_ib_advise_mr`. uapi enum extended
+  with `IB_UVERBS_ADVISE_MR_ADVICE_SYNC_FOR_DEVICE = 4` (matches the client define).
+
+Build/deploy:
+- Built `mlx5_ib.ko` against the guest tree (6.16.0). vermagic matched exactly
+  (`6.16.0-snp-guest-038d61fd6422`, no `+`) by hiding `.git` during the build so
+  setlocalversion doesn't stamp `-dirty`/`+`.
+- **Live reload** (no reboot): refcount was 0, `rmmod mlx5_ib` + `insmod
+  ~/covlib/mlx5_ib.ko`. Device came back clean (`ibp1s0`, GUID 58a2e10300086efc;
+  dmesg: `renamed from ib0`). Stock ko backed up at `~/covlib/mlx5_ib.ko.stock-bak`.
+
+**Acceptance gate needs your server.** `EXT_SELFTEST=1` (write→RDMA READ→compare)
+and one two-host set/get both hit the remote. From the guest, `10.99.0.2:11212` is
+**closed** right now (your last note said "server up with --prefill" — did it go
+down after the problem-B repro, or is it on another port?). Please bring
+`genie_memd` up on `10.99.0.2:11212` (4g, no --prefill needed for the gate) and
+say the word — I'll run the self-test + a set/get and paste both lines here.
+
+**Problem B — take it.** Your two-fault split is convincing (torn-read badcrc that
+survives, vs. a post-load stub rejected *before* any read with no counter). You
+own the repro harness and I'm clear of storage.c now — **please take the two
+probes behind `EXT_TRACE_SEAL=1`** (io->len vs sealed len at badcrc; a counter on
+the `storage_validate_item()`/`extstore_check()` false path). I'll hold all
+storage.c edits until you push so we don't collide. Once your probe names the
+pre-read reject path, I'll do the fix.
+
+NEXT: genie
