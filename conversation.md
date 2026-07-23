@@ -3205,3 +3205,94 @@ proof of the whole-segment theory, and it costs you 30 seconds.
 Token yours. `genie_memd` up, virgin, `:11212`.
 
 NEXT: ariel
+
+---
+
+## [2026-07-24 KST] admin — liveness check, and the kernel sync-range fix is **authorized**. Fix first, then sweep.
+
+Awake briefly, and glad I looked — this is worth answering now rather than in the
+morning.
+
+### Liveness
+
+**ariel and genie: one line each.** Alive / what you are doing right now. Nothing
+more than that; everything below is the substantive part.
+
+### The 95 us: authorized, and it overrides tonight's kernel freeze
+
+I wrote "the mlx5_ib work is done; nothing further authorized tonight". That was
+written before we knew the sync path had a 95 us bug in it. **Lifting it, narrowly:**
+
+> ariel is authorized to fix the dma_sync range in
+> `mlx5_ib_advise_mr_sync_for_{cpu,device}` — clamp each `dma_sync_single_for_*`
+> to the intersection of the umem segment and the requested sge range, instead of
+> passing the whole `seg_len` — then rebuild and live-reload the module.
+
+That is the only kernel change authorized. Everything else in the freeze stands.
+
+Two reasons this is worth waking up for: the diagnosis is measurement-backed on
+both sides (genie's 0.6 us ioctl floor rules out the call mechanism; ~16 KB at
+SEV SWIOTLB speed lands right on 95 us), and the change is small and reversible —
+you still have `mlx5_ib.ko.stock-bak`, and the reload procedure is known including
+re-adding `10.99.0.3/24` after `ibp1s0` is recreated.
+
+### Answering your three options: (2), and explicitly **not** (3)
+
+- **(2) fix first, then sweep** — yes. Your own reasoning is right: a 12-phase
+  sweep that reports ~100 us twelve times is not worth the fabric time when one
+  ~15 minute change may move the floor by 50x.
+- **(3) redefining the span to exclude the sync — no.** On SEV the SWIOTLB sync
+  *is* part of what it costs to reach remote memory; excluding it would report a
+  number the system cannot actually deliver. The span definition stays exactly as
+  specified. If the fix works, the span gets faster honestly rather than by
+  redefinition.
+- **(1) sweep anyway** — only as the fallback if the fix does not pan out.
+
+**One addition to reporting:** inside each span, break out sync time vs transfer
+time separately. That way the sync floor stays visible in the numbers instead of
+being folded into a composite, and if it regresses later we see it immediately.
+
+### Mandatory gate before any number counts
+
+The clamp changes precisely which bytes get synced. Getting it wrong produces
+**partially-synced data**, which looks exactly like this morning's zero-payload
+writes but only for part of the object — plausible-looking numbers over silently
+corrupt data, the failure mode that cost us today.
+
+So, after the reload and before the sweep:
+
+1. `EXT_SELFTEST=1` green in the guest.
+2. A two-host set/get, and **genie dumps the MR** for third-party confirmation
+   that real ciphertext landed — not zeros, not 0xAA, not a partial object.
+3. Only then start the grid.
+
+If the selftest fails or the dump shows a partial write, restore
+`mlx5_ib.ko.stock-bak`, report, and fall back to option (1) with the current
+module. Do not debug the kernel all night.
+
+### Cheap confirmation while you are in there
+
+genie's `tools/advise-cost.c` in the guest, before the fix: a curve flat in `nsge`
+while each call costs ~95 us is near-proof of the whole-segment theory, and it
+costs 30 seconds. Run it after the fix too — the same sweep should collapse toward
+genie's ~0.6 us floor. That before/after pair is the cleanest evidence the fix did
+what we think it did, and it is worth more than my agreeing with the hypothesis.
+
+Also worth the extra minute: check whether `SYNC_FOR_DEVICE` and `SYNC_FOR_CPU`
+cost the same, as genie suggested. If they differ materially after the clamp, the
+SET and GET spans want separate attention.
+
+### Unchanged
+
+Token protocol and the batch mirror are yours to run — I am not overriding what
+you two agreed, and genie's point about contaminating the adapter is correct.
+Fixed constants (64 B, crypto ON, `EXT_SLOT_SIZE=256`, 10M keys, pipeline 1) and
+the span definition stay put so tonight's numbers remain comparable with genie's
+mirror. Storage-model changes — COW, reversing P-1a, the size-class free-list —
+remain parked; if `mixed-size-stress.sh` shows growth, report it, do not fix it.
+
+Standing authorization from my previous entry otherwise continues: keep sweeping
+across QP count, worker threads, and client shape, and do not park anything on
+admin. Going back to sleep.
+
+NEXT: ariel
