@@ -23,6 +23,7 @@ static unsigned int g_read_retries = 3;   // torn-read retry cap (EXT_READ_RETRI
 static _Atomic uint64_t g_read_retry_ct = 0;  // torn-read retries observed (debug)
 static _Atomic uint64_t g_read_reresolve_ct = 0;  // reads recovered from RAM after retry exhaustion
 static _Atomic uint64_t g_badcrc_log_ct = 0;      // rate-limit for the badcrc diagnostic
+static _Atomic uint64_t g_flush_log_ct = 0;       // rate-limit for the flush diagnostic
 
 // Write-path context carried across the async RDMA WRITE completion (P-2).
 typedef struct {
@@ -489,6 +490,16 @@ static void storage_flush_item(void *e, item *it, uint32_t hv,
         ext_crypto_seal((uint8_t *)slot, it, ntotal, &aad);
     } else {
         memcpy(slot, it, ntotal);
+    }
+    // Diagnostic (genie's ask): log which key seals which slot + the nonce it
+    // wrote, so a badcrc slot_nonce can be matched back to its true owner.
+    if (g_crypto_on && atomic_fetch_add(&g_flush_log_ct, 1) < 200) {
+        const unsigned char *n = (const unsigned char *)slot;
+        fprintf(stderr, "extstore flush: key=%.*s -> {page=%u off=%u ver=%u} %s "
+            "nonce=%02x%02x%02x%02x.%02x%02x%02x%02x%02x%02x%02x%02x\n",
+            it->nkey, ITEM_key(it), loc.page_id, loc.offset, loc.page_version,
+            in_place ? "in_place" : "alloc",
+            n[0],n[1],n[2],n[3],n[4],n[5],n[6],n[7],n[8],n[9],n[10],n[11]);
     }
 
     // ponytail: per-flush malloc; pool if the SET rate makes it show up.
