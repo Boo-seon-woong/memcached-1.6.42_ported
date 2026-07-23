@@ -57,13 +57,19 @@ static uint64_t parse_size(const char *s) {
 static volatile sig_atomic_t g_dump;
 static void on_usr1(int s) { (void)s; g_dump = 1; }
 
+/* Fill byte the MR is initialised to. With --prefill it is 0xAA instead of 0,
+ * which is what distinguishes "the client's WRITE never arrived" (region still
+ * reads 0xAA) from "the WRITE arrived carrying zeros" (region reads 0x00) —
+ * indistinguishable on a zero-initialised MR. */
+static unsigned char g_fill;
+
 static void dump_mr(const unsigned char *m, uint64_t size) {
     if (!m) { fprintf(stderr, "genie_memd: dump: MR not registered yet\n"); return; }
     uint64_t nonzero = 0, shown = 0;
     for (uint64_t i = 0; i < size; i++) {
-        if (!m[i]) continue;
+        if (m[i] == g_fill) continue;
         nonzero++;
-        if (shown < 3 && (i == 0 || !m[i - 1])) {   /* start of a non-zero run */
+        if (shown < 3 && (i == 0 || m[i - 1] == g_fill)) {  /* start of a run */
             fprintf(stderr, "genie_memd: dump: offset 0x%lx:", (unsigned long)i);
             for (int k = 0; k < 32 && i + k < size; k++)
                 fprintf(stderr, " %02x", m[i + k]);
@@ -71,8 +77,8 @@ static void dump_mr(const unsigned char *m, uint64_t size) {
             shown++;
         }
     }
-    fprintf(stderr, "genie_memd: dump: %lu of %lu bytes non-zero (%.4f%%)\n",
-            (unsigned long)nonzero, (unsigned long)size,
+    fprintf(stderr, "genie_memd: dump: %lu of %lu bytes differ from fill 0x%02x (%.4f%%)\n",
+            (unsigned long)nonzero, (unsigned long)size, g_fill,
             size ? 100.0 * (double)nonzero / (double)size : 0.0);
 }
 
@@ -80,7 +86,11 @@ int main(int argc, char **argv) {
     if (argc < 3) dief("usage: genie_memd <port> <size> [--hugepages]");
     int port = atoi(argv[1]);
     uint64_t size = parse_size(argv[2]);
-    int huge = (argc > 3 && strcmp(argv[3], "--hugepages") == 0);
+    int huge = 0, prefill = 0;
+    for (int a = 3; a < argc; a++) {
+        if (!strcmp(argv[a], "--hugepages")) huge = 1;
+        else if (!strcmp(argv[a], "--prefill")) { prefill = 1; g_fill = 0xAA; }
+    }
 
     /* listen via rdma_cm */
     struct rdma_event_channel *ch = rdma_create_event_channel();
@@ -127,6 +137,10 @@ int main(int argc, char **argv) {
                 int mf = MAP_PRIVATE | MAP_ANONYMOUS | (huge ? MAP_HUGETLB : 0);
                 mem = mmap(NULL, size, PROT_READ | PROT_WRITE, mf, -1, 0);
                 if (mem == MAP_FAILED) dief("mmap");
+                if (prefill) {
+                    memset(mem, g_fill, size);
+                    fprintf(stderr, "genie_memd: MR prefilled with 0x%02x\n", g_fill);
+                }
                 mr = ibv_reg_mr(pd, mem, size, IBV_ACCESS_LOCAL_WRITE |
                         IBV_ACCESS_REMOTE_READ | IBV_ACCESS_REMOTE_WRITE);
                 if (!mr) dief("ibv_reg_mr");
