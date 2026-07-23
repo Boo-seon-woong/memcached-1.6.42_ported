@@ -406,7 +406,13 @@ static void recache_or_free(io_pending_t *pending) {
         c->thread->stats.get_aborted_extstore++;
         pthread_mutex_unlock(&c->thread->stats.mutex);
     } else if (p->miss) {
-        item_unlink(p->hdr_it);
+        // A badcrc "miss" is a torn read (in-place overwrite raced us) — the data
+        // still exists in remote memory, so DON'T unlink the key. Unlinking here
+        // permanently deletes a live key and leaks its remote slot (genie's
+        // finding). Only a genuine miss (transport failure / real absence) drops
+        // the stub.
+        if (!p->badcrc)
+            item_unlink(p->hdr_it);
         slabs_free(it, p->read_clsid);
         pthread_mutex_lock(&c->thread->stats.mutex);
         c->thread->stats.miss_from_extstore++;
