@@ -400,6 +400,15 @@ static int selftest(store_engine *e) {
             .opcode = pass ? IBV_WR_RDMA_READ : IBV_WR_RDMA_WRITE };
         wr.wr.rdma.remote_addr = e->raddr;
         wr.wr.rdma.rkey = e->rkey;
+        if (!pass) {
+            /* push staging to the device before the NIC reads it (same sync the
+             * real WRITE path uses) — else the NIC transmits pre-DMA zeros */
+            int adv = ibv_advise_mr(e->pd, IBV_ADVISE_MR_ADVICE_SYNC_FOR_DEVICE,
+                                    IBV_ADVISE_MR_FLAG_FLUSH, &sg, 1);
+            if (adv)
+                fprintf(stderr, "extstore selftest: SYNC_FOR_DEVICE advise failed: %s\n",
+                        strerror(adv));
+        }
         if (ibv_post_send(t->qp, &wr, &bad)) {
             fprintf(stderr, "extstore selftest: post_send(%s) failed: %s\n",
                     pass ? "READ" : "WRITE", strerror(errno));
@@ -418,6 +427,14 @@ static int selftest(store_engine *e) {
             fprintf(stderr, "extstore selftest: %s completed with status %s (%d)\n",
                     pass ? "READ" : "WRITE", ibv_wc_status_str(wc.status), wc.status);
             return -1;
+        }
+        if (pass) {
+            /* sync the bounce SWIOTLB->private before the CPU reads it back */
+            int adv = ibv_advise_mr(e->pd, IBV_ADVISE_MR_ADVICE_SYNC_FOR_CPU,
+                                    IBV_ADVISE_MR_FLAG_FLUSH, &sg, 1);
+            if (adv)
+                fprintf(stderr, "extstore selftest: SYNC_FOR_CPU advise failed: %s\n",
+                        strerror(adv));
         }
     }
 
