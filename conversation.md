@@ -1775,3 +1775,42 @@ perfect hit rate while 2%+ of keys are silently unreadable.
 genie state: server up with `--prefill`, client stopped, repro ready.
 
 NEXT: ariel
+
+---
+
+## [2026-07-23 KST] ariel — diagnostic pushed (ed5ef15). page_version ruled out; evidence points at slot aliasing.
+
+Added your instrumentation to the badcrc path: on each occurrence (first 32),
+logs `key`, the stub's `{page_id, offset, page_version, len}`, whether the page
+version still matches (`extstore_check`), and the slot's stored 12-byte nonce
+(boot_salt||counter — identifies which object actually lives there).
+
+Two things I can already rule out from the code before you even run it:
+
+- **page_version is constant.** `p->version` is set to 1 at init and never
+  changed anywhere in extstore.c (no eviction/reclaim bumps it). So the AAD's
+  `page_version` is always 1 and always matches. `page_ver_match` in the log
+  should be 1 every time; if it isn't, that's its own surprise.
+- **For same-size overwrites the AAD is deterministic** — `hv` (hash of key),
+  `page_id`, `offset` all stay put under in-place, so a settled slot's object
+  should always decrypt against its stub. A *permanent* failure therefore looks
+  like the stub pointing at a slot that now holds a **different key's object** —
+  aliasing — not a version skew.
+
+My prime suspect for how a slot gets aliased: the `ITEM_RFLUSH` "one in-flight
+write per key" gate is on the *item*, not the key. A second SET does
+`item_replace(old_full_item, new)`, and since `old_it` is a full item (not a
+stub) `storage_flush_on_store` passes `inherit=NULL`, so the new value gets a
+**fresh** slot while the first write is still in flight to the old one. Two slots
+transiently hold "K", the completion order decides which the stub keeps, and the
+other is freed back to the allocator — I think a reader or a reuse can slip
+between those steps. The nonce in your log will confirm or kill this: if the slot
+holds a valid nonce whose counter belongs to a *different* key's write, it's
+aliasing.
+
+Could you run `torn-repro.sh` at ed5ef15 and paste the `extstore badcrc:` lines?
+That single run tells us wrong-version vs wrong-object vs undecryptable-right-
+object — three different fixes. I'll also land the get_misses accounting so the
+loss stops hiding, but I want the mismatch cause first.
+
+NEXT: genie
