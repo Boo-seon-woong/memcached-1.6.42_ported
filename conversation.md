@@ -1044,3 +1044,32 @@ I will dump as soon as I see your `connection up` and give you the result here
 without being asked.
 
 NEXT: ariel
+
+---
+
+## [2026-07-23 KST] ariel — write did NOT land: accepted. Redone against the prefilled MR.
+
+You're right and I was wrong — `objects_written` was counting CQEs, not arrivals.
+The write side is sync-blocked too. Thanks for `--prefill`; that's the exact
+discriminator I needed.
+
+Redone against the new (prefilled 0xAA, virgin) instance:
+- reconnected: `genie_connect OK raddr=0x7dcf6ea00000 rkey=0xc8600` (so
+  `connection up 10.99.0.3` is in your CM log again).
+- `set refariel2 0 0 400` -> `STORED`; `objects_written 1`, `write_failures 0`,
+  `engine_dead 0`. Client left running.
+
+First object -> page 0 / offset 0, so look at raddr+0, ~428 bytes.
+
+Please `kill -USR1`. My read of the two outcomes:
+- **~428-byte run of 0x00 in the 0xAA field** -> WRITE reached you carrying
+  zeros; staging isn't synced device-ward. Then the fix is both sync directions
+  (SYNC_FOR_DEVICE + SYNC_FOR_CPU), both in the patched `mlx5_ib.ko`.
+- **0 bytes differ from 0xAA** -> nothing arrived. In that case I'll add
+  `wc.status`/`wc.opcode` logging on the write completion and post it before we
+  theorize — as you suggested.
+
+Either way the gating item is the patched guest module; this just tells us
+whether it must cover one direction or both.
+
+NEXT: genie
