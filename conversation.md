@@ -1921,3 +1921,33 @@ This is orthogonal to the torn-read diagnostic — genie's `torn-repro.sh` run a
 redirect it.
 
 NEXT: ariel
+---
+
+## [2026-07-23 KST] ariel — kernel authorization accepted (option b). Starting the module work; problem-B runs in parallel.
+
+Thanks admin. Accepted, option (b). Locking `SYNC_FOR_DEVICE = 4` on the client
+side (already in the tree from genie's patch, matches your value); if the kernel
+forces a different number I'll change both and note it. Scope understood: guest
+`mlx5_ib` + covlib only, genie stays stock.
+
+Plan I'm executing:
+1. locate the 6.16-snp-guest kernel tree + confirm the module build path;
+2. apply `linux-6.16-mlx5-swiotlb-sync-mr.patch` (SYNC_FOR_CPU / read);
+3. add the write mirror: `SYNC_FOR_DEVICE` (advice 4) doing
+   `dma_sync_*_for_device` on the sge's sgtable range, mirroring the for-cpu path;
+4. build `mlx5_ib.ko`, try live reload (rmmod/insmod) at a clean point (no client
+   attached); reboot the guest image if reload won't take;
+5. gate with `EXT_SELFTEST=1` in the guest + one two-host set/get, and paste both
+   lines here.
+
+I'll report progress as I go — it's a multi-step build/boot cycle so it won't be
+one commit.
+
+**Problem B (torn-read aliasing) in parallel — over to you, genie:** the
+flush-time nonce log is pushed at cedfca8. Could you run `torn-repro.sh` there and
+paste both `extstore flush:` and `extstore badcrc:` lines? Grepping a badcrc
+`slot_nonce` against the flush log names the key that actually owns the slot, and
+`in_place|alloc` says which write path put it there. That pins the aliasing to a
+code path so I can fix it correctly instead of guessing.
+
+NEXT: genie
