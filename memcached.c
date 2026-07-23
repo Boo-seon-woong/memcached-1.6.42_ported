@@ -211,6 +211,9 @@ void stats_reset(void) {
     STATS_UNLOCK();
     threadlocal_stats_reset();
     item_stats_reset();
+#ifdef EXTSTORE
+    storage_prof_reset();   // D6: each measured phase starts from a clean histogram
+#endif
 }
 
 static void settings_init(void) {

@@ -24,6 +24,41 @@
 #include <infiniband/verbs.h>
 #include <rdma/rdma_cma.h>
 #include "extstore.h"
+#include <time.h>
+
+/* EXT_RDMA_PROF (D6): runtime-gated in-server span profiling. EXT_WRITE_BATCH
+ * caps the posting round so each SYNC advise is attributable to one op. */
+#define PROF_BUCKETS 8192        /* x100ns => 0..819us range, overflow clamps */
+#define PROF_BUCKET_NS 100
+static int g_prof_on = 0;
+static unsigned int g_batch_limit = 32;      /* posting-round cap (<= wrs[] size) */
+static double g_ns_per_cycle = 0.0;          /* rdtsc cycle -> ns */
+
+static inline uint64_t prof_rdtsc(void) { return __builtin_ia32_rdtsc(); }
+
+/* Calibrate rdtsc against CLOCK_MONOTONIC over ~50ms (invariant TSC assumed). */
+static void prof_calibrate(void) {
+    struct timespec t0, t1;
+    uint64_t c0 = prof_rdtsc();
+    clock_gettime(CLOCK_MONOTONIC, &t0);
+    struct timespec s = { .tv_sec = 0, .tv_nsec = 50 * 1000 * 1000 };
+    nanosleep(&s, NULL);
+    uint64_t c1 = prof_rdtsc();
+    clock_gettime(CLOCK_MONOTONIC, &t1);
+    double ns = (t1.tv_sec - t0.tv_sec) * 1e9 + (t1.tv_nsec - t0.tv_nsec);
+    uint64_t cyc = c1 - c0;
+    g_ns_per_cycle = cyc ? ns / (double)cyc : 0.0;
+    fprintf(stderr, "extstore prof: TSC %.4f ns/cycle (%.0f MHz)\n",
+            g_ns_per_cycle, g_ns_per_cycle > 0 ? 1000.0 / g_ns_per_cycle : 0.0);
+}
+
+static inline void prof_record(uint32_t *hist, uint64_t *count, uint64_t *sum,
+                               uint64_t cycles) {
+    uint64_t ns = (uint64_t)(cycles * g_ns_per_cycle);
+    unsigned int b = ns / PROF_BUCKET_NS;
+    if (b >= PROF_BUCKETS) b = PROF_BUCKETS - 1;
+    hist[b]++; (*count)++; *sum += ns;
+}
 
 /* DMA-registerable buffer. On SEV-SNP the passthrough NIC can only DMA SHARED
  * (unencrypted) memory, so the read-bounce and write-staging pools must come
@@ -96,6 +131,10 @@ typedef struct {
     unsigned int outstanding;
     store_engine *e;
     pthread_t tid;
+    /* EXT_RDMA_PROF: per-thread span histogram (lock-free; aggregated on read).
+     * PROF_BUCKETS x PROF_BUCKET_NS covers 0..~102us; bucket = ns/100 clamped. */
+    uint64_t prof_r_count, prof_w_count, prof_r_sum_ns, prof_w_sum_ns;
+    uint32_t prof_r_hist[8192], prof_w_hist[8192];
 } store_iothr;
 
 struct store_engine {
@@ -247,7 +286,7 @@ static void *extstore_io_thread(void *arg) {
         }
 
         int n = 0;
-        while (t->queue && t->outstanding + n < depth && n < 32) {
+        while (t->queue && t->outstanding + n < depth && n < (int)g_batch_limit) {
             obj_io *io = t->queue;
             int slot = -1;
             if (io->mode == OBJ_IO_READ) {
@@ -272,9 +311,6 @@ static void *extstore_io_thread(void *arg) {
             wrs[n].wr.rdma.rkey = e->rkey;
             wrs[n].next = NULL;
             if (n) wrs[n-1].next = &wrs[n];
-#ifdef EXT_RDMA_PROF
-            io->t_post = __builtin_ia32_rdtsc();
-#endif
             n++;
         }
         pthread_mutex_unlock(&t->mutex);
@@ -285,6 +321,13 @@ static void *extstore_io_thread(void *arg) {
             int nd = 0;
             for (int i = 0; i < n; i++)
                 if (wrs[i].opcode == IBV_WR_RDMA_WRITE) dev_sg[nd++] = sg[i];
+            /* WRITE span opens here — before the SYNC_FOR_DEVICE advise (D6). */
+            if (g_prof_on) {
+                uint64_t ts = prof_rdtsc();
+                for (int i = 0; i < n; i++)
+                    if (wrs[i].opcode == IBV_WR_RDMA_WRITE)
+                        ((obj_io *)(uintptr_t)wrs[i].wr_id)->t_start = ts;
+            }
             if (nd) {
                 int adv = ibv_advise_mr(e->pd, IBV_ADVISE_MR_ADVICE_SYNC_FOR_DEVICE,
                                         IBV_ADVISE_MR_FLAG_FLUSH, dev_sg, nd);
@@ -292,6 +335,13 @@ static void *extstore_io_thread(void *arg) {
                 if (adv && !atomic_exchange(&dev_warned, 1))
                     fprintf(stderr, "extstore: ibv_advise_mr(SYNC_FOR_DEVICE) failed: %s"
                             " — writes may transmit pre-DMA contents\n", strerror(adv));
+            }
+            /* READ span opens here — immediately before ibv_post_send (D6). */
+            if (g_prof_on) {
+                uint64_t ts = prof_rdtsc();
+                for (int i = 0; i < n; i++)
+                    if (wrs[i].opcode == IBV_WR_RDMA_READ)
+                        ((obj_io *)(uintptr_t)wrs[i].wr_id)->t_start = ts;
             }
             if (ibv_post_send(t->qp, &wrs[0], &bad)) {
                 atomic_store(&e->dead, 1);
@@ -313,6 +363,8 @@ static void *extstore_io_thread(void *arg) {
 
         int c = ibv_poll_cq(t->cq, 32, wc);
         if (c <= 0) { if (t->outstanding) sched_yield(); continue; }
+        /* WRITE span closes at the CQE reap; READ span closes after SYNC_FOR_CPU. */
+        uint64_t t_poll = g_prof_on ? prof_rdtsc() : 0;
 
         /* batched SWIOTLB->private sync for READs in this batch */
         int nsync = 0;
@@ -334,12 +386,18 @@ static void *extstore_io_thread(void *arg) {
                 fprintf(stderr, "extstore: ibv_advise_mr(SYNC_FOR_CPU) failed: %s"
                         " — bounce reads are not being synced\n", strerror(adv));
         }
+        uint64_t t_sync_done = g_prof_on ? prof_rdtsc() : 0;
 
         for (int i = 0; i < c; i++) {
             obj_io *io = (obj_io *)(uintptr_t)wc[i].wr_id;
-#ifdef EXT_RDMA_PROF
-            io->t_cqe = __builtin_ia32_rdtsc();
-#endif
+            if (g_prof_on && wc[i].status == IBV_WC_SUCCESS && io->t_start) {
+                if (io->mode == OBJ_IO_READ)
+                    prof_record(t->prof_r_hist, &t->prof_r_count, &t->prof_r_sum_ns,
+                                t_sync_done - io->t_start);
+                else
+                    prof_record(t->prof_w_hist, &t->prof_w_count, &t->prof_w_sum_ns,
+                                t_poll - io->t_start);
+            }
             int ok = (wc[i].status == IBV_WC_SUCCESS);
             /* The callback owns io and may free it (storage_write_done_cb frees
              * the enclosing flush_ctx), so snapshot everything we still need. */
@@ -469,6 +527,11 @@ void *extstore_init(struct extstore_conf_file *fh, struct extstore_conf *cf,
     pthread_mutex_init(&e->staging_mutex, NULL);
     atomic_store(&e->dead, 0);
     e->local = (fh->file && strcmp(fh->file, "local") == 0);
+
+    if (getenv("EXT_RDMA_PROF")) { g_prof_on = 1; prof_calibrate(); }
+    { const char *b = getenv("EXT_WRITE_BATCH");
+      if (b) { unsigned v = (unsigned)strtoul(b, NULL, 10);
+               if (v >= 1 && v <= 32) g_batch_limit = v; } }
 
     if (e->local) {
         /* local test backend: remote memory + staging are plain buffers */
@@ -689,6 +752,30 @@ int extstore_delete(void *ptr, unsigned int page_id, uint64_t page_version,
     return rv;
 }
 
+/* Sum per-thread histograms and pull avg / p50 / p99 (ns) out of the merged one. */
+static void prof_summarize(store_engine *e, int read,
+        uint64_t *count, uint64_t *avg, uint64_t *p50, uint64_t *p99) {
+    uint64_t merged[PROF_BUCKETS]; memset(merged, 0, sizeof(merged));
+    uint64_t total = 0, sum = 0;
+    for (unsigned int i = 0; i < e->io_threadcount; i++) {
+        store_iothr *t = &e->io_threads[i];
+        uint32_t *h = read ? t->prof_r_hist : t->prof_w_hist;
+        total += read ? t->prof_r_count : t->prof_w_count;
+        sum   += read ? t->prof_r_sum_ns : t->prof_w_sum_ns;
+        for (int b = 0; b < PROF_BUCKETS; b++) merged[b] += h[b];
+    }
+    *count = total; *avg = total ? sum / total : 0;
+    *p50 = *p99 = 0;
+    if (!total) return;
+    uint64_t c = 0, need50 = (total + 1) / 2, need99 = (total * 99 + 99) / 100;
+    int f50 = 0, f99 = 0;
+    for (int b = 0; b < PROF_BUCKETS && !(f50 && f99); b++) {
+        c += merged[b];
+        if (!f50 && c >= need50) { *p50 = (uint64_t)b * PROF_BUCKET_NS; f50 = 1; }
+        if (!f99 && c >= need99) { *p99 = (uint64_t)b * PROF_BUCKET_NS; f99 = 1; }
+    }
+}
+
 void extstore_get_stats(void *ptr, struct extstore_stats *st) {
     store_engine *e = ptr;
     STAT_L(e);
@@ -696,6 +783,22 @@ void extstore_get_stats(void *ptr, struct extstore_stats *st) {
     *st = e->stats;
     st->page_data = pd;
     STAT_UL(e);
+    if (g_prof_on) {
+        prof_summarize(e, 1, &st->prof_read_count, &st->prof_read_avg_ns,
+                       &st->prof_read_p50_ns, &st->prof_read_p99_ns);
+        prof_summarize(e, 0, &st->prof_write_count, &st->prof_write_avg_ns,
+                       &st->prof_write_p50_ns, &st->prof_write_p99_ns);
+    }
+}
+
+void extstore_prof_reset(void *ptr) {
+    store_engine *e = ptr;
+    for (unsigned int i = 0; i < e->io_threadcount; i++) {
+        store_iothr *t = &e->io_threads[i];
+        t->prof_r_count = t->prof_w_count = t->prof_r_sum_ns = t->prof_w_sum_ns = 0;
+        memset(t->prof_r_hist, 0, sizeof(t->prof_r_hist));
+        memset(t->prof_w_hist, 0, sizeof(t->prof_w_hist));
+    }
 }
 
 void extstore_get_page_data(void *ptr, struct extstore_stats *st) {

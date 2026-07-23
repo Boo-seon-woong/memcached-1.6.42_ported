@@ -110,6 +110,10 @@ void storage_delete(void *e, item *it) {
 // but feels a little off being defined here.
 // At very least maybe "process_storage_stats" in line with making this more
 // of a generic wrapper module.
+void storage_prof_reset(void) {
+    if (ext_storage) extstore_prof_reset(ext_storage);
+}
+
 void process_extstore_stats(ADD_STAT add_stats, void *c) {
     int i;
     char key_str[STAT_KEY_LEN];
@@ -182,6 +186,15 @@ void storage_stats(ADD_STAT add_stats, void *c) {
                 (unsigned long long)atomic_load(&g_abort_chunked));
         APPEND_STAT("extstore_get_aborted_alloc", "%llu",
                 (unsigned long long)atomic_load(&g_abort_alloc));
+        // D6 in-server span distribution (ns); populated only under EXT_RDMA_PROF=1.
+        APPEND_STAT("extstore_prof_read_count", "%llu", (unsigned long long)st.prof_read_count);
+        APPEND_STAT("extstore_prof_read_avg_ns", "%llu", (unsigned long long)st.prof_read_avg_ns);
+        APPEND_STAT("extstore_prof_read_p50_ns", "%llu", (unsigned long long)st.prof_read_p50_ns);
+        APPEND_STAT("extstore_prof_read_p99_ns", "%llu", (unsigned long long)st.prof_read_p99_ns);
+        APPEND_STAT("extstore_prof_write_count", "%llu", (unsigned long long)st.prof_write_count);
+        APPEND_STAT("extstore_prof_write_avg_ns", "%llu", (unsigned long long)st.prof_write_avg_ns);
+        APPEND_STAT("extstore_prof_write_p50_ns", "%llu", (unsigned long long)st.prof_write_p50_ns);
+        APPEND_STAT("extstore_prof_write_p99_ns", "%llu", (unsigned long long)st.prof_write_p99_ns);
     }
 
 }
