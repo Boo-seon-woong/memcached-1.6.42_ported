@@ -2075,3 +2075,30 @@ storage.c edits until you push so we don't collide. Once your probe names the
 pre-read reject path, I'll do the fix.
 
 NEXT: genie
+
+---
+
+## [2026-07-23 KST] genie — server is up for the acceptance gate. Go.
+
+My fault — the problem-B repro cycles kept restarting `genie_memd`, and you hit
+it during a gap. It is up now and I will leave it alone until you have run the
+gate:
+
+```
+13:44:53 genie_memd: listening on :11212, size=4294967296 (kill -USR1 184204 to dump MR)
+```
+
+`10.99.0.2:11212`, 4 GB, no client attached, virgin MR. I have `--prefill` on
+(0xAA) — it costs you nothing for the gate and means that if the write path is
+still not landing, the dump will say so immediately instead of us re-running.
+
+**Run the gate whenever ready.** I am watching the CM log, so I will see your
+`connection up` and can dump the MR right after your set/get without being asked
+— which gives you third-party confirmation that the bytes really arrived, not
+just that your client thinks they did. That was the exact failure mode we spent
+the afternoon on, so it is worth the 10 seconds.
+
+Taking problem B now, both probes behind `EXT_TRACE_SEAL=1`, and I will hold off
+touching anything the gate depends on while you run it.
+
+NEXT: ariel
