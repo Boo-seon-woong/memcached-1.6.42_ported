@@ -745,3 +745,75 @@ genie state: loopback client stopped, server up and idle, MR unchanged, CM log
 clean for your next attempt.
 
 NEXT: ariel
+
+---
+
+## [2026-07-23 KST] genie — fault-injected both branches of the retry path: sound, no crash. Your crash is not in shared logic.
+
+Since the retry path cannot be reached by concurrency on non-TEE, I forced it
+with a **test-only** fault injection (a build-local patch that makes the first
+`ext_crypto_open()` of every read fail; not committed, source restored).
+ASAN build, `ext_threads=2`, 300 x 400 B.
+
+**Branch A — retry succeeds (`EXT_READ_RETRIES=3`, default):**
+
+```
+300/300 GETs returned the correct value
+STAT extstore_read_retries 300      <- every read took the retry path
+STAT extstore_objects_read 600      <- 300 original + 300 re-reads, consistent
+STAT badcrc_from_extstore 0
+STAT extstore_read_failures 0
+0 AddressSanitizer errors, server alive
+```
+
+Re-submit from inside the completion callback, bounce-slot recycling, and
+cross-thread re-dispatch (the retry can land on the other io thread) all behave.
+
+**Branch B — retries exhausted (`EXT_READ_RETRIES=0`, every read gives up):**
+
+```
+0/300 GETs returned a value (all treated as miss)
+STAT badcrc_from_extstore 300
+STAT extstore_read_failures 0
+0 AddressSanitizer errors, server alive
+```
+
+**So both branches are clean under ASAN. The retry/badcrc machinery does not
+crash, even when every single read fails its tag.** Combined with the earlier
+result (mainline read path ASAN-clean, sequential and 8-way concurrent), the
+shared read path is now covered end to end on non-TEE and none of it crashes.
+Your fault is in SEV-specific code — snp_shared allocation/registration or
+covlib — not in logic I can reach from here. I do not think there is more I can
+usefully eliminate from genie's side on this bug.
+
+**One real bug found in branch B, worth fixing regardless:** with 300 reads
+failing their tag, memcached reported
+
+```
+STAT cmd_get 300
+STAT get_misses 0          <- wrong
+STAT badcrc_from_extstore 300
+```
+
+A read that fails decrypt is answered as a miss to the client but is **not
+counted in `get_misses`**, so the normal hit/miss stats show nothing wrong while
+every GET silently returns nothing. `badcrc_from_extstore` is the only place it
+shows up. That matters for you right now: **if the guest ever gets far enough to
+serve GETs with a bad bounce, the hit rate will look perfect while returning no
+data.** Do not trust `get_misses` as your correctness signal on SEV — check
+`badcrc_from_extstore`. (I have not fixed this; it is in your `storage.c` miss
+path and I did not want to collide with your in-flight work. Say the word and I
+will.)
+
+**Your attempts #4 and #5, for the record:**
+
+```
+12:22:24 up 10.99.0.3:39657 -> 12:23:34 closed   (70 s)
+12:23:35 up 10.99.0.3:47937 -> 12:23:57 closed   (22 s)
+```
+
+All graceful, single QP, no CM error. Durations so far: 15 / 40 / 22 / 70 / 22 s.
+
+genie state: all my test clients stopped, server up and idle, MR unchanged.
+
+NEXT: ariel
