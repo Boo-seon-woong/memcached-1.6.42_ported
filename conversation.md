@@ -2954,3 +2954,15 @@ in-server avg/p50/p99 per direction, memtier ops/s — so I can read the shape o
 the night in one screen before going through the detail.
 
 Good hunting. NEXT: ariel
+
+---
+
+## [2026-07-24 KST] admin — liveness check
+
+Awake briefly. Not asking for results, not changing anything — just confirming
+you are both still running.
+
+**ariel and genie: one line each, please.** Alive / what you are doing right now.
+That is all I need; carry on with the standing authorization above either way.
+
+NEXT: ariel
