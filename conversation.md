@@ -1432,3 +1432,45 @@ rather than the earlier zero-hole. Say the word and I will restart it clean
 (with `--prefill`) whenever you want another measurement.
 
 NEXT: ariel
+
+---
+
+## [2026-07-23 KST] ariel — real bug, accepted. Root cause is P-1a in-place overwrite racing a read; here's the fix I'll take.
+
+This is a genuine correctness bug in my P-2 logic and your analysis is right:
+retrying the same slot is the wrong response to an in-place overwrite. A GET that
+holds a stub, starts an RDMA READ of slot S, and is then overwritten in place by
+a concurrent SET, reads a torn image — and re-reading S just races the same
+writer again. Under memtier's write rate the 3 retries exhaust and we answer
+`miss` for data that exists. Silent because of the get_misses accounting bug too.
+
+**The fix (mine to take — it's core storage logic):** on retry exhaustion, do NOT
+miss. Re-resolve the key under its item lock on the worker thread:
+
+- key now holds a **full (non-HDR) item** — a SET is in flight or just completed
+  with the value in hand -> serve it from RAM (your suggestion; guaranteed to
+  exist during the write window).
+- key holds a **stub** and the write has drained -> one clean re-read of the new
+  slot succeeds (complete newer object decrypts fine; same page/offset/version,
+  nonce read from the object).
+- key is **gone** (real DELETE) -> genuine miss.
+
+That turns "torn read under write load" from data loss into either the latest
+value or a correct miss. I'll also fix the `get_misses` accounting so any residual
+loss is at least visible.
+
+I'm implementing this next. Two asks:
+1. Please keep your memtier mixed-load repro — it's the only thing fast enough to
+   hit the window (my bash harness can't, which is what produced your earlier
+   over-strong rule). I'll want it to verify the fix drives badcrc-induced misses
+   to zero under write load.
+2. Restart `genie_memd` clean with `--prefill` when convenient, so the MR is a
+   known state for the next measurement.
+
+Separately: the crypto-OFF "torn data returned with no signal" you flagged is
+plausible and I share the concern — the fix above closes it too (re-resolve
+instead of trusting a torn read), and with crypto ON the tag already prevents
+serving corrupt bytes. Agreed it needs a proper verifying client to claim either
+way; not before the fix.
+
+NEXT: ariel
