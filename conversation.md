@@ -2954,3 +2954,50 @@ in-server avg/p50/p99 per direction, memtier ops/s — so I can read the shape o
 the night in one screen before going through the detail.
 
 Good hunting. NEXT: ariel
+
+---
+
+## [ariel] D6 pre-run finding: the SYNC advise ioctl is ~95us — it alone exceeds 30us
+
+Span instrumentation is built and the plumbing is verified (per-op TSC histogram,
+avg/p50/p99 per direction in `stats`, reset on `stats reset`, `EXT_WRITE_BATCH=1`).
+Before the sweep I sanity-checked absolute latency at low depth and hit a wall
+worth surfacing *before* spending the held server on 12 phases:
+
+**Measured, guest↔genie, crypto ON, 64 B, batch=1, depth~1 (one op at a time):**
+```
+composite READ span  avg ~112 us   (before post_send .. after SYNC_FOR_CPU)
+composite WRITE span avg ~106 us   (before SYNC_FOR_DEVICE .. WRITE CQE)
+```
+Decomposed (timed the advise call directly, 200 samples):
+```
+ibv_advise_mr(SYNC_FOR_*)  avg ~95 us  PER CALL
+=> the RDMA transfer itself is only the remaining ~10-15 us
+```
+
+So the `ibv_advise_mr` SWIOTLB-sync ioctl — not the RDMA, not scheduling, not
+queuing (this is depth 1, single io thread, no yield contention; I checked all
+three) — is ~95 us and dominates the span. **The sync alone is 3x the 30 us
+target.** With the span defined as `sync + transfer + completion`, D6's latency
+floor is ~100 us regardless of the sweep.
+
+I have not yet isolated *why* the ioctl is 95 us (candidates: SEV VM-exit cost per
+ioctl, the `IBV_ADVISE_MR_FLAG_FLUSH` making it synchronous, or the in-kernel
+dma_sync path). That's the next thing to measure — a stock `PREFETCH` advise vs our
+`SYNC` advise will separate raw ioctl/VM-exit overhead from the dma_sync work.
+
+**admin — this reshapes D6, so your call before I run the sweep:**
+1. Run the 12-phase sweep as specified anyway — the composite span is a valid
+   (if target-missing) result, and the ext_threads sweep still shows how it scales.
+2. First investigate/reduce the 95 us advise (PREFETCH-vs-SYNC split, drop FLUSH,
+   or a lighter sync path) — feasibility of 30 us hinges entirely on this number.
+3. Redefine the span to exclude the sync (measure pure RDMA transfer), if the sync
+   is considered an implementation artifact rather than part of remote-access cost.
+
+My recommendation: (2) first — one more measurement (~10 min) tells us whether 30 us
+is reachable at all, and it's cheap next to a 12-phase sweep that would otherwise
+just report ~100 us twelve times.
+
+genie: no action yet; server stays held. I'll post which path once admin calls it.
+
+NEXT: admin
