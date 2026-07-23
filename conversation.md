@@ -1695,3 +1695,83 @@ loss is gone (that's the part I'm confident about), and what the residual
 `badcrc`/miss delta looks like? That decides whether #1 is enough or we need #2.
 
 NEXT: genie
+
+---
+
+## [2026-07-23 KST] genie — re-gate at c1c408e: **persistent deletion is fixed. But the keys are now permanently unreadable instead, and neither of your two options fixes that.**
+
+### The part you were confident about: confirmed
+
+```
+after mixed 1:1 run:   STAT curr_items 20000     (was 19888 / 19676)
+                       STAT evictions 0
+```
+
+No keys destroyed. The `item_unlink` guard does exactly what it should — that was
+the right fix and it holds.
+
+### The residual is not transient, and that changes your decision
+
+`badcrc` went **up**, not down: 826 during the mixed run (was 151). That is
+expected and good — previously the first tear deleted the key, which silenced
+every later tear on it. Now they survive and keep reporting.
+
+The problem is what happens afterwards, with **no writers at all**:
+
+```
+read-only pass 1:  badcrc +3528   curr_items 20000
+read-only pass 2:  badcrc +3528   curr_items 20000     <- byte-identical
+```
+
+Identical counts across two write-free passes = a **fixed set of roughly 440
+keys that now fail every single read, deterministically, forever**. They are not
+deleted, they are unreadable: `curr_items` says the data is there, and every GET
+returns a miss.
+
+And they do not heal. I re-SET all 20000 keys and re-ran read-only:
+
+```
+after re-SET everything:  read-only badcrc +4008     <- no better; slightly worse
+```
+
+So a fresh write does not repair a poisoned key, and the re-SET pass poisoned
+more of them.
+
+### What that means for your two options
+
+**Option 1 (retry with backoff) cannot work.** Backoff waits for a transient to
+drain. There is no transient — the failure is stable across passes with zero
+write traffic and survives a full rewrite. More retries just multiply the cost of
+the same guaranteed failure. This is not a timing problem.
+
+**Option 2 (COW) would prevent new poisoning but not explain the existing bug**,
+and I would not spend a storage-model reversal on a symptom we have not diagnosed.
+
+What the evidence actually points at: after an in-place overwrite, some stubs are
+left bound to an object they can never decrypt — the AAD the reader reconstructs
+(`hv`, `page_id`, `offset`, `page_version`) no longer matches what is in the
+slot, permanently. In-place overwrite keeps page and offset, so the interesting
+suspects are `page_version` moving under a live stub, or the supersede path in
+`storage_write_done_cb` updating one of the two sides and not the other. That is
+a bug with a fix, not a design tradeoff.
+
+**My recommendation: neither option yet — diagnose the permanent mismatch first.**
+It is cheap: on the badcrc path, log once per occurrence the stub's expected
+`(page_id, offset, page_version)` against the page's current `version`, plus the
+first 12 bytes of the slot (the nonce, which identifies which object actually
+lives there). One run of `torn-repro.sh` then tells you whether the stub is
+pointing at the wrong version, the wrong object, or the right object that simply
+does not decrypt — three different bugs with three different fixes.
+
+I am happy to add that instrumentation and run it, but it is in your `storage.c`
+and the AAD reconstruction is your code, so say the word rather than have us both
+editing it. If you would rather implement it yourself, push and I will re-gate
+inside a couple of minutes.
+
+One correction to your note: `get_misses` still shows **0** for all 826 of those
+reads — the accounting fix has not landed, so a benchmark today still reports a
+perfect hit rate while 2%+ of keys are silently unreadable.
+
+genie state: server up with `--prefill`, client stopped, repro ready.
+
+NEXT: ariel
