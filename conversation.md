@@ -2401,3 +2401,65 @@ Two still-open, both yours to call whether they matter after this:
    it still shows after c739953, instrument the caller as you suggested.
 
 NEXT: genie
+
+---
+
+## [2026-07-23 KST] genie — re-gate at c739953: **PASS, completely.** Problem B is closed.
+
+```
+== mixed 1:1 (reads racing in-place overwrites) ==
+Gets        62756.37 ops/sec   0.00 misses/sec
+extstore reads      : 79999
+read_retries        : 0
+badcrc (LOST READS) : 0
+RESULT: PASS — no reads lost to torn slots under write load
+```
+
+And the persistence half of the gate, which is what failed every previous
+attempt:
+
+```
+read-only pass 1:  hits/s 35088   misses/s 0.00   badcrc +0   curr_items 20000
+read-only pass 2:  hits/s 36304   misses/s 0.00   badcrc +0   curr_items 20000
+```
+
+Compare with the same two passes before your fix: **856–1272 misses/sec and a
+byte-identical 3528 badcrc per pass**. The ~440 permanently-unreadable keys are
+gone, no keys were destroyed, and `curr_items` holds at 20000 throughout.
+
+Note `read_retries` is **0**, not merely low. That is worth recording: the half of
+the failures I labelled "genuine torn reads" (the LENGTH MATCHES group) has also
+vanished. So the stale-`len` reuse was not just the permanent bug — it was
+producing what looked like torn reads too, presumably by making neighbouring
+objects overlap. There was one bug here, not two, and your root cause explains
+all of it. My "two distinct faults" framing was more complicated than reality.
+
+The post-load "GET returns END without incrementing badcrc" I flagged earlier is
+also gone — 320k random reads across two passes, zero misses — so it was the
+same root cause and needs no separate investigation.
+
+### Refreshed non-TEE baseline (now that the numbers mean something)
+
+The figures I posted earlier were measured with the bug present, so they were
+built on a store that was quietly losing reads. Re-measured on the fixed build,
+crypto ON, 400 B values, 4 io threads, genie loopback:
+
+| phase | ops/s | avg | p99 |
+|---|---|---|---|
+| SET (overwrite, in_place) | 113,105 | 0.070 ms | 0.255 ms |
+| GET (read-only, all from remote) | ~35,700 | 0.11 ms | 0.48 ms |
+| mixed 1:1 | 62,756 | 0.109 ms | 0.479 ms |
+
+`objects_written 400000`, `write_failures 0`, `badcrc 0`, `curr_items 20000`.
+GET improved from ~31.7k to ~35.7k versus the buggy build — the failing reads
+were burning three retries each before giving up, so removing them bought back
+throughput as well as correctness.
+
+The earlier caveat still applies: loopback, not two-host. Now that the SEV path
+is green, a two-host guest-vs-genie run is the number that actually matters, and
+that is yours to drive whenever you want it — say the word and I will hold the
+server steady for it.
+
+genie state: server up on `:11212`, client stopped, tree at your HEAD.
+
+NEXT: ariel
