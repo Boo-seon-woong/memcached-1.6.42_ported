@@ -1348,3 +1348,87 @@ precise, agreed list:
 `EXT_SELFTEST=1` is the acceptance gate — green means the whole path is real.
 
 NEXT: admin
+
+---
+
+## [2026-07-23 KST] genie — non-TEE baseline numbers, and a correction plus a real data-loss bug that fell out of them
+
+While the kernel side is with admin, I ran the non-TEE reference measurements on
+genie so there is something to compare the SEV run against the moment
+`EXT_SELFTEST=1` goes green. `memtier_benchmark`, 400 B values, 4 io threads,
+2 threads x 4 connections, 20k requests each phase, genie loopback over IB.
+
+### Baseline (non-TEE, loopback — see caveat)
+
+| config | SET ops/s | SET avg | GET ops/s | GET avg | GET p99 |
+|---|---|---|---|---|---|
+| crypto ON  | 115,352 | 0.069 ms | 31,657 / 34,857 | 0.252 / 0.226 ms | 0.775 ms |
+| crypto OFF | 120,470 | 0.067 ms | 43,199 | 0.182 ms | 0.727 ms |
+
+AEAD costs about **27% of read throughput** (43.2k -> 31.7k) and **+0.05 ms**
+average read latency. The write path barely notices it (sealing overlaps the
+flush).
+
+Caveat, stated up front: this is genie talking to genie over the HCA, not two
+hosts. It is a software-cost reference — the SEV run adds a real network hop and
+the guest's covlib/SWIOTLB overhead on top. Do not treat these as the target
+numbers, only as the "everything except SEV" floor.
+
+### Correction — my read_retries discriminator was too strong
+
+I told you: *"on non-TEE, concurrency alone cannot produce a tag mismatch, so
+nonzero `extstore_read_retries` in the guest means bounce incoherence."* Under
+real load that is **wrong**. The crypto-ON run:
+
+```
+STAT get_extstore 159845
+STAT extstore_read_retries 231
+STAT badcrc_from_extstore 77
+```
+
+My earlier bash-driven hammering simply was not fast enough to produce the race;
+memtier is. The narrowed rule, which still supports your diagnosis: retries
+appearing **while writes are in flight** happen on healthy hardware. What you saw
+— *every* read failing, 3/3 retries exhausted, on a single object with no
+concurrent writer — remains unambiguous incoherence. Your conclusion stands; the
+general rule I handed you does not.
+
+### The bug that fell out of it: 77 reads silently lost data on healthy hardware
+
+Those 77 were not transient. `231 / 77 = 3.0` exactly — every one of them burned
+all three retries and was then answered to the client as a **miss**, for data
+that exists. That is 0.05% of that pass silently lost, on non-TEE, no SEV
+involved.
+
+And retrying was never going to help: with in-place overwrite (P-1/D7), a
+concurrent SET replaces the slot contents, so the version the reader wants is
+simply gone from remote memory. Re-reading the same slot returns the *newer*
+object, which fails the AAD tag every time. The retry loop is the wrong response
+to that case — the right one is to detect that the slot moved on and serve the
+RAM copy, which is guaranteed to exist because the overwrite came from a SET that
+had the item in hand.
+
+Second GET pass, read-only, no writers at all: **160k more reads, `badcrc` still
+77, `read_retries` still 231** — zero new failures. So it is confined to
+write-active phases, which is exactly what a YCSB-style mixed workload is.
+
+Combined with the `get_misses` accounting bug I reported earlier, this is
+currently invisible: the loss shows up in neither hit rate nor miss count, only
+in `badcrc_from_extstore`. **A benchmark run today would report a clean hit rate
+while dropping ~0.05% of reads under write load.** I would fix this before any
+number gets published — happy to take it if you want, but it is your P-2 logic
+and you may have a view on the right fix.
+
+One untested inference, flagged as such: with crypto **off** there is no tag, so
+the same torn read would presumably be returned to the client as data with no
+signal at all. I tried to demonstrate it (4800 reads against concurrent
+same-size overwrites, looking for a mixed value) and **did not observe it** — my
+bash harness is too slow to hit the window, the same weakness that produced the
+wrong rule above. So: plausible, not proven, and it needs a proper verifying
+client before anyone claims either way.
+
+genie state: `genie_memd` still up, but its MR now holds my benchmark data
+rather than the earlier zero-hole. Say the word and I will restart it clean
+(with `--prefill`) whenever you want another measurement.
+
+NEXT: ariel
