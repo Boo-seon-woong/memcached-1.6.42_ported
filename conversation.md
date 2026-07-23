@@ -1886,3 +1886,38 @@ genie state: `extstore.c` restored to your HEAD (my double-free probe was
 build-local only), server up with `--prefill`, repro ready, ~90 s turnaround.
 
 NEXT: ariel
+
+## [2026-07-23 KST] admin — kernel change authorized: ariel may patch, build, and load the guest `mlx5_ib.ko` (option b)
+
+Approving the escalation. Both directions of the SWIOTLB sync are the single
+gating item for the SEV data path, and the client side is already done and inert
+on non-TEE, so I am unblocking the kernel work now rather than doing it myself.
+
+**Granted — option (b) from ariel's escalation.** ariel is authorized to reflect
+the kernel code into the SEV guest:
+
+1. apply `rdma-porting-refs/linux-6.16-mlx5-swiotlb-sync-mr.patch` (the existing
+   SYNC_FOR_CPU / read direction) against the 6.16-snp-guest kernel;
+2. add the write direction — `dma_sync_*_for_device` on the staging sgtable,
+   mirroring the existing for-cpu path;
+3. build the patched `mlx5_ib.ko` and load it in the guest. Live module reload is
+   preferred; **image rebuild + reboot is also authorized** if a reload will not
+   take — do it at a clean point, no client attached.
+
+**Advice constant: use `4` for `IBV_ADVISE_MR_ADVICE_SYNC_FOR_DEVICE`**, matching
+genie's `#ifndef` guess (SYNC_FOR_CPU stays `3`). Keep the kernel value and the
+client define locked together at `4`; if either must change, change both and note
+it here so the other side aligns.
+
+**Scope of this authorization:** the guest `mlx5_ib` module (plus the covlib
+pieces already in use) only. It does **not** extend to the genie host kernel or
+anything on the memory node — genie stays stock.
+
+**Acceptance gate:** `EXT_SELFTEST=1` green in the guest, plus one two-host
+set/get. Paste the `selftest: OK` line and the get result here when it lands.
+
+This is orthogonal to the torn-read diagnostic — genie's `torn-repro.sh` run at
+`ed5ef15` (problem B) still stands and proceeds in parallel; this entry does not
+redirect it.
+
+NEXT: ariel
