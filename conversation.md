@@ -2628,3 +2628,136 @@ Server stays held; I'll post the D6 invocation once the value-size / span /
 thread knobs settle.
 
 NEXT: ariel
+
+---
+
+## [2026-07-24 KST] admin — D6 methodology settled: span definition, knobs, and the exact invocations
+
+ariel asked for the experiment owner's call on value size, measured span, and
+thread/QP count before spending genie's held server on a run of the wrong shape.
+All settled below. Two items need instrumentation work before the first run —
+flagged explicitly rather than buried in the config.
+
+### The span — neither memtier-side nor a generic in-server rdtsc window
+
+What D6 measures is **remote memory access latency**: one SWIOTLB sync + one RDMA
+transfer + its completion. Crypto sits **outside** the span on both sides.
+
+**GET (remote → private)**
+- start: immediately before `ibv_post_send` of the RDMA READ
+- end: CQE reaped **and** `SYNC_FOR_CPU` (bounce → private) complete — the moment
+  the bytes are readable in private memory
+- GCM `open` is **not** in the span
+
+**SET (private → remote)** — the symmetric counterpart
+- start: immediately before `ibv_advise_mr(SYNC_FOR_DEVICE)` on the staging buffer
+- end: RDMA WRITE CQE reaped
+- GCM `seal` is **not** in the span
+
+Both are then `[one SWIOTLB sync + one RDMA transfer + one completion]`, so the
+two directions are directly comparable and the SEV overhead appears symmetrically
+in each.
+
+Note this is deliberately **not** client-visible SET latency — the flush is async
+and runs on the io thread. Measuring the io thread's remote write is intended.
+
+### Two implementation items before the first run
+
+1. **`EXT_RDMA_PROF` must bracket exactly the spans above.** In particular the
+   write span must start *before* the SYNC_FOR_DEVICE advise, not after it.
+   Putting the advise outside the span would drop the SWIOTLB cost from writes
+   while reads still carry it, and the two directions would stop being comparable
+   — which is the whole point of the symmetric definition.
+2. **Force one WRITE per posting round during measurement.** SYNC_FOR_DEVICE is
+   currently batched over each round's WRITE sges, so with a batch >1 the per-op
+   attribution is meaningless. A measurement-only env knob (e.g.
+   `EXT_WRITE_BATCH=1`) is fine.
+
+### Config (fixed across the sweep)
+
+| knob | value |
+|---|---|
+| value size | 64 B |
+| crypto | **ON always** — no OFF ablation this round |
+| `EXT_SLOT_SIZE` | 256 |
+| keys | 10,000,000 |
+| memcached worker threads | 16 (`-t 16`) |
+| `-m` | 2048 (MB) |
+| `ext_item_size` / `ext_item_age` | 2 / 0 |
+| memtier | 16 threads x 12 clients = 192 connections |
+| pipeline depth | 1 |
+
+Sizing rationale, so it can be checked rather than trusted:
+
+- 64 B value → `ntotal ≈ 135`, `rlen = ntotal + 28 ≈ 163`, derived from genie's
+  measured 400 B → `rlen 499`. 256 B slots hold that with margin.
+- 10M x 256 B = **2.56 GB** into the 4 GB MR.
+- D7 has no recache, so a flushed key is a RAM stub forever and **every GET is
+  remote by construction** — there is no need to starve `-m` to force spill.
+- But 10M stubs is roughly **1.2 GB of slab memory**. If `-m` is smaller than
+  that, stubs get evicted and keys vanish mid-run. `-m 2048` with
+  `ext_item_age=0` keeps every value remote and every stub resident.
+
+### Sweep and phases
+
+QP count = worker threads x {1, 2, 4, 8} → **`ext_threads` = 16 / 32 / 64 / 128**.
+
+Three workloads at each sweep point: **SET only**, **GET only**, **SET:GET 1:9**.
+Twelve measured phases in total.
+
+### Invocations
+
+memcached (guest), per sweep point (`${N}` ∈ 16/32/64/128):
+
+```sh
+EXT_CRYPTO_KEY=$PWD/.ext.key EXT_SLOT_SIZE=256 EXT_RDMA_PROF=1 EXT_WRITE_BATCH=1 \
+./memcached -p 11211 -U 0 -t 16 -m 2048 \
+  -o ext_path=10.99.0.2:11212:4g,ext_item_size=2,ext_item_age=0,ext_threads=${N}
+```
+
+preload — once per sweep point, since restarting memcached drops every stub:
+
+```sh
+memtier_benchmark -s 127.0.0.1 -p 11211 -P memcache_text \
+  -t 16 -c 12 --pipeline=1 -d 64 \
+  --key-prefix=memtier- --key-minimum=1 --key-maximum=10000000 \
+  --key-pattern=P:P --ratio=1:0 -n 52084 --hide-histogram
+```
+
+(192 connections x 52,084 = 10,000,128 — covers the keyspace once.)
+
+measurement, same client shape, 60 s per phase:
+
+```sh
+# SET only
+memtier_benchmark ... --ratio=1:0 --key-pattern=R:R --test-time=60
+# GET only
+memtier_benchmark ... --ratio=0:1 --key-pattern=R:R --test-time=60
+# SET:GET 1:9
+memtier_benchmark ... --ratio=1:9 --key-pattern=R:R --test-time=60
+```
+
+### Pre-run checks
+
+- **Guest RAM** must comfortably exceed ~1.2 GB of stubs plus `-m 2048`. Confirm
+  the SEV guest has the headroom before the first preload rather than discovering
+  it as evictions at 8M keys.
+- **`genie_memd` must accept 128 QPs** at the x8 sweep point. Only 4 have ever
+  been exercised. genie: please confirm the accept path and any per-QP resource
+  limit before that point, not during it.
+- Restart `genie_memd` virgin between sweep points so page allocation starts from
+  the same state each time.
+
+### Deliverables
+
+Per sweep point x phase: the **in-server span distribution** (avg / p50 / p99) as
+the latency result, plus memtier ops/s as the throughput figure. genie's mirrored
+loopback run of the identical invocation gives the non-TEE reference so the SEV
+overhead is a subtraction rather than an estimate. MR dump after the final run as
+the landed-bytes check.
+
+The free-list capacity properties genie raised stay deferred: value size is
+constant here, so top-only reuse and monotonic shrink are both inert. Run
+`tools/mixed-size-stress.sh` after D6, as agreed.
+
+NEXT: ariel
