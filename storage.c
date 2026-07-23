@@ -25,6 +25,25 @@ static _Atomic uint64_t g_read_reresolve_ct = 0;  // reads recovered from RAM af
 static _Atomic uint64_t g_badcrc_log_ct = 0;      // rate-limit for the badcrc diagnostic
 static _Atomic uint64_t g_flush_log_ct = 0;       // rate-limit for the flush diagnostic
 
+/* Problem B probes (genie). The pre-read reject path had no counter at all: a GET
+ * of a stub can be answered as a miss before any RDMA read happens, and nothing
+ * recorded it — which is why "permanently unreadable" looked like the same fault
+ * as a torn read. These name which path it is. */
+static _Atomic uint64_t g_abort_chunked = 0;   /* P-6: item too large */
+static _Atomic uint64_t g_abort_alloc = 0;     /* no read destination available */
+
+/* EXT_TRACE_SEAL=1: table indexed by nonce counter (dense, monotonic) recording
+ * who sealed each object and at what length, so a badcrc can compare the length
+ * it read against the length actually written. No write-path I/O: logging every
+ * seal would change the timing of the race being observed. */
+#define SEAL_TRACE_MAX (1u << 21)
+struct seal_rec { uint32_t page, off, len; char key[24]; };
+static struct seal_rec *g_seal_tab;
+
+static uint64_t nonce_counter(const void *obj) {   /* [salt 4][counter 8] */
+    uint64_t c; memcpy(&c, (const char *)obj + 4, 8); return c;
+}
+
 // Write-path context carried across the async RDMA WRITE completion (P-2).
 typedef struct {
     item *it;
@@ -159,6 +178,10 @@ void storage_stats(ADD_STAT add_stats, void *c) {
                 (unsigned long long)atomic_load(&g_read_retry_ct));
         APPEND_STAT("extstore_read_reresolved", "%llu",
                 (unsigned long long)atomic_load(&g_read_reresolve_ct));
+        APPEND_STAT("extstore_get_aborted_chunked", "%llu",
+                (unsigned long long)atomic_load(&g_abort_chunked));
+        APPEND_STAT("extstore_get_aborted_alloc", "%llu",
+                (unsigned long long)atomic_load(&g_abort_alloc));
     }
 
 }
@@ -221,6 +244,18 @@ static void _storage_get_item_cb(void *e, obj_io *io, int ret) {
                         p->hdr_it->nkey, ITEM_key(p->hdr_it),
                         io->page_id, io->offset, io->page_version, io->len, pv_ok,
                         n[0],n[1],n[2],n[3],n[4],n[5],n[6],n[7],n[8],n[9],n[10],n[11]);
+                    if (g_seal_tab) {
+                        uint64_t ctr = nonce_counter(io->buf);
+                        struct seal_rec *r = ctr < SEAL_TRACE_MAX ? &g_seal_tab[ctr] : NULL;
+                        if (r && r->key[0])
+                            fprintf(stderr, "extstore badcrc: ^ slot holds key=%s sealed at "
+                                "page=%u off=%u len=%u; we read len=%u -> %s\n",
+                                r->key, r->page, r->off, r->len, io->len,
+                                r->len == io->len ? "LENGTH MATCHES" : "LENGTH MISMATCH");
+                        else
+                            fprintf(stderr, "extstore badcrc: ^ no seal record (counter %llu)\n",
+                                (unsigned long long)ctr);
+                    }
                 }
                 // GCM writes the (unverified) plaintext into read_it BEFORE the
                 // tag check, so a failed open left read_it's header garbage;
@@ -317,11 +352,14 @@ int storage_get_item(LIBEVENT_THREAD *t, item *it, mc_resp *resp) {
     item *new_it;
     if (ntotal > settings.slab_chunk_size_max) {
         // P-6: chunked items unsupported on the RDMA backend.
+        atomic_fetch_add(&g_abort_chunked, 1);
         return -1;
     }
     new_it = do_item_alloc_pull(ntotal, clsid);
-    if (new_it == NULL)
+    if (new_it == NULL) {
+        atomic_fetch_add(&g_abort_alloc, 1);
         return -1;
+    }
     // so we can free the chunk on a miss
     new_it->slabs_clsid = clsid;
 
@@ -488,6 +526,15 @@ static void storage_flush_item(void *e, item *it, uint32_t hv,
         struct ext_aad aad = { .hv = hv, .page_id = loc.page_id, .pad = 0,
             .offset = loc.offset, .page_version = loc.page_version };
         ext_crypto_seal((uint8_t *)slot, it, ntotal, &aad);
+        if (g_seal_tab) {
+            uint64_t ctr = nonce_counter(slot);
+            if (ctr < SEAL_TRACE_MAX) {
+                struct seal_rec *r = &g_seal_tab[ctr];
+                r->page = loc.page_id; r->off = loc.offset; r->len = rlen;
+                int kn = it->nkey < (int)sizeof(r->key) - 1 ? it->nkey : (int)sizeof(r->key) - 1;
+                memcpy(r->key, ITEM_key(it), kn); r->key[kn] = 0;
+            }
+        }
     } else {
         memcpy(slot, it, ntotal);
     }
@@ -665,6 +712,10 @@ void *storage_init_config(struct settings *s) {
     cf->ext_cf.read_slots  = (v = getenv("EXT_READ_SLOTS"))  ? atoi(v) : 32;
     cf->ext_cf.write_slots = (v = getenv("EXT_WRITE_SLOTS")) ? atoi(v) : 256;
     if ((v = getenv("EXT_READ_RETRIES"))) g_read_retries = atoi(v);
+    if (getenv("EXT_TRACE_SEAL")) {
+        g_seal_tab = calloc(SEAL_TRACE_MAX, sizeof(*g_seal_tab));
+        fprintf(stderr, "extstore: seal trace %s\n", g_seal_tab ? "on" : "alloc failed");
+    }
 
     return cf;
 }

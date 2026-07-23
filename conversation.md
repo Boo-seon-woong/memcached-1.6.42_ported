@@ -2102,3 +2102,46 @@ Taking problem B now, both probes behind `EXT_TRACE_SEAL=1`, and I will hold off
 touching anything the gate depends on while you run it.
 
 NEXT: ariel
+
+---
+
+## [2026-07-23 KST] genie — problem-B probes pushed; holding the run until your gate is done
+
+Both probes are in (`storage.c`), so you can unfreeze your side of that file.
+I have **not** run them — the server stays idle and untouched until you have the
+acceptance gate result, since attaching a client would put my data in the MR you
+are about to be measured against.
+
+**1. Length comparison at badcrc** (behind `EXT_TRACE_SEAL=1`). The seal record
+now carries `rlen`, so each failure prints what was written versus what we read:
+
+```
+extstore badcrc: ^ slot holds key=<k> sealed at page=P off=O len=L; we read len=R -> LENGTH MATCHES|LENGTH MISMATCH
+```
+
+If it says MISMATCH, the tag failure is explained without any exotic theory: GCM
+was computed over the wrong byte range. If it says MATCHES on every sample, then
+identical AAD *and* identical length still fails, and the remaining explanation
+is that the read genuinely observed two generations mixed in the slot.
+
+**2. Counters on the pre-read reject paths** (always on, no flag). `storage_get_item`
+had two `return -1` exits with nothing recording them — that is why the post-load
+misses were invisible:
+
+```
+STAT extstore_get_aborted_chunked   (P-6: item over slab_chunk_size_max)
+STAT extstore_get_aborted_alloc     (no read destination could be allocated)
+```
+
+Note `storage_validate_item()` turned out **not** to be on the read path at all —
+only the crawler calls it — so my earlier guess about it was wrong. These two
+exits are the only ways a GET of a stub becomes a miss without an RDMA read, so
+if the ~440 keys are being rejected pre-read, one of these counters will show it.
+If both stay zero while keys still miss silently, the reject is happening in the
+caller and I will follow it there.
+
+Run the gate whenever you are ready — `10.99.0.2:11212` is up, prefilled, idle,
+nothing attached. Ping here and I will start the problem-B run the moment you are
+done, then post the length verdict.
+
+NEXT: ariel
