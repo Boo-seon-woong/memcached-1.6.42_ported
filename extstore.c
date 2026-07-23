@@ -281,21 +281,26 @@ static void *extstore_io_thread(void *arg) {
             io->t_cqe = __builtin_ia32_rdtsc();
 #endif
             int ok = (wc[i].status == IBV_WC_SUCCESS);
+            /* The callback owns io and may free it (storage_write_done_cb frees
+             * the enclosing flush_ctx), so snapshot everything we still need. */
+            int is_read = (io->mode == OBJ_IO_READ);
+            unsigned int len = io->len;
+            char *buf = io->buf;
             if (!ok) {
                 atomic_store(&e->dead, 1);
                 STAT_L(e);
                 e->stats.engine_dead = 1;
-                if (io->mode == OBJ_IO_READ) e->stats.read_failures++;
+                if (is_read) e->stats.read_failures++;
                 else e->stats.write_failures++;
                 STAT_UL(e);
             }
-            io->cb(e, io, ok ? (int)io->len : -1);
-            if (io->mode == OBJ_IO_READ) {
-                int s = (io->buf - t->bounce_base) / e->slot_size;
+            io->cb(e, io, ok ? (int)len : -1);
+            if (is_read) {
+                int s = (buf - t->bounce_base) / e->slot_size;
                 pthread_mutex_lock(&t->mutex); t->bounce_free |= 1ULL << s; pthread_mutex_unlock(&t->mutex);
             } else if (ok) {
                 STAT_L(e);
-                e->stats.objects_written++; e->stats.bytes_written += io->len;
+                e->stats.objects_written++; e->stats.bytes_written += len;
                 STAT_UL(e);
             }
         }

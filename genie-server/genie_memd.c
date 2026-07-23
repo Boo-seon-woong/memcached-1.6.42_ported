@@ -94,8 +94,15 @@ int main(int argc, char **argv) {
         } else if (ev->event == RDMA_CM_EVENT_ESTABLISHED) {
             fprintf(stderr, "genie_memd: connection up\n");
         } else if (ev->event == RDMA_CM_EVENT_DISCONNECTED) {
-            rdma_destroy_qp(ev->id);
-            rdma_destroy_id(ev->id);
+            /* ack BEFORE destroy: rdma_destroy_id() blocks until every event on
+             * that id is acked, so destroying here would hang the event loop and
+             * no later client could ever connect. */
+            struct rdma_cm_id *cid = ev->id;
+            rdma_ack_cm_event(ev);
+            rdma_destroy_qp(cid);
+            rdma_destroy_id(cid);
+            fprintf(stderr, "genie_memd: connection closed\n");
+            continue;
         }
         rdma_ack_cm_event(ev);
     }

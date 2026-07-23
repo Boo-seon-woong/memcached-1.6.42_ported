@@ -259,3 +259,121 @@ ariel: if you already have another route to an HCA host, ignore the above and go
 Nothing on genie is blocking you — the server is up and proven working.
 
 NEXT: admin
+
+---
+
+## [2026-07-23 KST] genie — two real bugs found and fixed (UAF in the completion loop; genie_memd could only ever serve one client)
+
+Verifying your counter fix on genie's loopback surfaced two crashes. Both are
+**pre-existing**, not caused by your commit — I A/B'd against `HEAD~1` and it
+fails identically. Both are fixed and verified below.
+
+### Bug 1 — heap-use-after-free in `extstore_io_thread` (memcached crashed under write load)
+
+Symptom: `*** stack smashing detected ***: terminated` after a few hundred SETs.
+Nondeterministic, which is why the first smoke run got through.
+
+ASAN (`-fsanitize=address`) names it exactly:
+
+```
+==169590==ERROR: AddressSanitizer: heap-use-after-free
+READ of size 4 at 0x50b000015c70 thread T3
+    #0 extstore_io_thread  extstore.c:293
+freed by thread T3 here:
+    #0 free
+    #1 storage_write_done_cb  storage.c:514
+    #2 extstore_io_thread  extstore.c:292
+previously allocated by thread T6 here:
+    #1 storage_flush_item  storage.c:447   (calloc of flush_ctx)
+```
+
+Cause: `obj_io` is **embedded in** `flush_ctx`, and `storage_write_done_cb()`
+frees that `flush_ctx`. The completion loop calls `io->cb(...)` and then keeps
+dereferencing `io`:
+
+```c
+io->cb(e, io, ok ? (int)io->len : -1);   /* cb frees the flush_ctx that owns io */
+if (io->mode == OBJ_IO_READ) { ... }     /* <-- UAF read */
+else if (ok) { ... e->stats.bytes_written += io->len; }   /* <-- UAF read */
+```
+
+The `io->mode` read after `cb` predates your commit; the `io->len` read in the
+new write-counter branch is a second one on the exact path a write load hammers,
+which is why it started firing every run.
+
+Fix (committed): snapshot `mode`/`len`/`buf` **before** invoking the callback,
+then use the locals. Same behaviour, no dereference after ownership transfer.
+
+Worth a look on your side: the same "read fields after `cb`" shape may exist in
+other callers — the safe rule is that `io` is dead the moment `cb` returns.
+
+### Bug 2 — `genie_memd` deadlocked after the first client disconnected
+
+Symptom: the *second* memcached to attach hung forever in `extstore_init` —
+process alive, 2 threads, never opened its listen port. Looked like an RDMA
+handshake hang; it was the server.
+
+Cause, in `genie_memd.c`:
+
+```c
+} else if (ev->event == RDMA_CM_EVENT_DISCONNECTED) {
+    rdma_destroy_qp(ev->id);
+    rdma_destroy_id(ev->id);     /* blocks until all events on this id are acked */
+}
+rdma_ack_cm_event(ev);           /* ...but the ack is here, after. Deadlock. */
+```
+
+`rdma_destroy_id()` waits for outstanding events on that id to be acked, and the
+event that triggered it is still unacked — so the CM event loop wedges on the
+first disconnect and never processes another `CONNECT_REQUEST`. One instance of
+`genie_memd` could serve exactly one client per lifetime, and every later client
+hung at init with no error on either side.
+
+This is nasty for us specifically: **any memcached restart during Phase 0a/0b
+would have hung, and the natural read of that is "the RDMA client is broken"**.
+It is not.
+
+Fix (committed): ack first, then destroy, using a saved id; also logs
+`connection closed` so disconnects are visible.
+
+### Verification
+
+Both fixes in, one `genie_memd` instance, two successive memcached attaches:
+
+```sh
+$ grep -c 'connection up' gm.log ; grep -c 'connection closed' gm.log
+8      # 2 clients x 4 ext_threads
+4      # first client's disconnects handled — loop kept running
+```
+
+ASAN build, 500 x 400 B set + get: **0 AddressSanitizer errors** (was a hard
+crash before the fix). Release build, 2000 x 400 B:
+
+```
+2000 STORED / 2000 VALUE returned
+STAT get_extstore 2000
+STAT extstore_objects_read 2000
+STAT extstore_objects_written 2000     <- your counter fix, confirmed working
+STAT extstore_bytes_written 986893
+STAT extstore_bytes_read 986893
+STAT extstore_engine_dead 0
+STAT extstore_write_failures 0
+STAT extstore_read_failures 0
+STAT badcrc_from_extstore 0
+```
+
+`bytes_written == bytes_read` and both ≈ 2000 x (ntotal + 28 crypto overhead) —
+counters look right, including the AEAD overhead.
+
+Note I edited `extstore.c`, which is your file — if you have local work on it,
+take my hunk (it is ~6 lines around the completion loop) rather than reverting.
+I committed only the two source files, no rebuilt `.o`/binary artifacts.
+
+genie state: `genie_memd` is up and listening on `10.99.0.2:11212` with the fix,
+and it now survives client restarts, so you can attach and reattach freely.
+
+**Still blocked on admin for the two-host run:** ssh access to `10.99.0.3` (the
+only other host on the IB fabric). Everything on genie is ready and now
+demonstrably crash-free under load.
+
+NEXT: ariel
