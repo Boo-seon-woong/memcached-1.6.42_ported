@@ -21,6 +21,7 @@
 static bool g_crypto_on = false;
 static unsigned int g_read_retries = 3;   // torn-read retry cap (EXT_READ_RETRIES)
 static _Atomic uint64_t g_read_retry_ct = 0;  // torn-read retries observed (debug)
+static _Atomic uint64_t g_read_reresolve_ct = 0;  // reads recovered from RAM after retry exhaustion
 
 // Write-path context carried across the async RDMA WRITE completion (P-2).
 typedef struct {
@@ -154,6 +155,8 @@ void storage_stats(ADD_STAT add_stats, void *c) {
         APPEND_STAT("extstore_read_failures", "%llu", (unsigned long long)st.read_failures);
         APPEND_STAT("extstore_read_retries", "%llu",
                 (unsigned long long)atomic_load(&g_read_retry_ct));
+        APPEND_STAT("extstore_read_reresolved", "%llu",
+                (unsigned long long)atomic_load(&g_read_reresolve_ct));
     }
 
 }
@@ -184,14 +187,32 @@ static void _storage_get_item_cb(void *e, obj_io *io, int ret) {
                 extstore_submit(e, io);   // engine frees this bounce slot, re-posts
                 return;
             }
-            miss = true;
-            p->badcrc = true;
-            // GCM writes the (unverified) plaintext into read_it BEFORE the tag
-            // check, so a failed open leaves read_it's header garbage. It is only
-            // going to be freed now — reset it_flags so slabs_free doesn't take
-            // the chunked path on a bogus header (ASAN SEGV, slabs.c:468).
-            read_it->it_flags = 0;
-            read_it->slabs_clsid = p->read_clsid;
+            // Retries exhausted: an in-place overwrite (P-1a) keeps racing this
+            // read, so re-reading the slot can never win. Don't lose data — the
+            // overwrite came from a SET that had the value in RAM, so re-resolve
+            // the key and serve the live RAM copy if it's still there and the
+            // same size. (genie's finding: torn reads under write load returned
+            // miss for data that exists.)
+            uint32_t rhv = hash(ITEM_key(p->hdr_it), p->hdr_it->nkey);
+            item_lock(rhv);
+            item *cur = assoc_find(ITEM_key(p->hdr_it), p->hdr_it->nkey, rhv);
+            if (cur && !(cur->it_flags & ITEM_HDR) &&
+                    ITEM_ntotal(cur) == ITEM_ntotal(p->hdr_it)) {
+                memcpy(read_it, cur, ITEM_ntotal(cur));  // serve live value (copy under lock)
+                item_unlock(rhv);
+                atomic_fetch_add(&g_read_reresolve_ct, 1);
+                // fall through to the hit path (miss stays false).
+            } else {
+                item_unlock(rhv);
+                miss = true;
+                p->badcrc = true;
+                // GCM writes the (unverified) plaintext into read_it BEFORE the
+                // tag check, so a failed open left read_it's header garbage;
+                // reset it_flags so slabs_free doesn't take the chunked path on a
+                // bogus header (ASAN SEGV, slabs.c:468).
+                read_it->it_flags = 0;
+                read_it->slabs_clsid = p->read_clsid;
+            }
         }
     } else {
         memcpy(read_it, io->buf, io->len);   // crypto off: io->len == ntotal
