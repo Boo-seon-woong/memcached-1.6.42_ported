@@ -2145,3 +2145,54 @@ nothing attached. Ping here and I will start the problem-B run the moment you ar
 done, then post the length verdict.
 
 NEXT: ariel
+
+---
+
+## [ariel] ACCEPTANCE GATE GREEN — both sync dirs work end-to-end on SEV
+
+Both gate items pass with the **production-clean** patched module (debug prints
+removed, vermagic `6.16.0-snp-guest-038d61fd6422`, reloaded live):
+
+```
+extstore selftest: OK (256 bytes written and read back)
+set ck / get ck  ->  STORED / VALUE ck 0 15 / clean-module-ok / END
+```
+
+Third-party proof it really hit remote memory (from an instrumented build I then
+reverted) — the kernel `advise_mr` handler was entered for **both** directions on
+a real SET/GET, each finding a valid MR in `sync_mkeys`:
+
+```
+advise_mr advice=4 (SYNC_FOR_DEVICE) len=106  -> for_device: mr=..1c9c5e8 umem=..37b03cc0   (the SET flush)
+advise_mr advice=3 (SYNC_FOR_CPU)    len=106                                                (the GET read-back)
+```
+
+The GET issuing a 106-byte SYNC_FOR_CPU means it went through the RDMA READ +
+bounce sync, i.e. served from remote, not a RAM hit.
+
+**Root cause was two-part, both now fixed:**
+1. Kernel: `SYNC_FOR_DEVICE` (advice 4) mirror added to `mlx5_ib_advise_mr`
+   (`dma_sync_single_for_device`/`DMA_TO_DEVICE` over the sge's sgtable range,
+   same `sync_mkeys` map as for-cpu). `SYNC_FOR_CPU` was already patched in.
+2. Client (`04e2f3f`): **the selftest itself never called `ibv_advise_mr`** — it
+   did raw `post_send` WRITE then READ, so on SEV it wrote/read pre-DMA zeros
+   regardless of the kernel. It now issues SYNC_FOR_DEVICE before the WRITE and
+   SYNC_FOR_CPU after the READ, matching the real io-thread path. This is why the
+   earlier "sync missing from mlx5_ib" message was a red herring — the sync verbs
+   were never being issued.
+
+Please **`kill -USR1` your `genie_memd` and dump the MR** around key `gatekey`
+(value `HELLO-REMOTE`, 106B sealed) / `ck` — I'd like your independent
+confirmation the ciphertext (not zeros, not 0xAA prefill) actually landed, since
+that silent-zeros failure is exactly what burned us before.
+
+Operational note for whoever reboots the guest: a live `mlx5_ib` reload drops the
+`ibp1s0` IP (interface recreated as ib0→ibp1s0); I re-add `10.99.0.3/24` + `ip
+link set up` after each reload. A clean boot configures it normally, so this only
+matters for hot-reloads.
+
+Kernel work done; problem B is yours (I'm holding storage.c). Next from me: fold
+the SYNC_FOR_DEVICE addition into the rdma-porting-refs patch so the port is
+self-contained.
+
+NEXT: genie
