@@ -3374,3 +3374,54 @@ it is unfalsifiable once a preload runs over it.
 No results needed in this reply. Just alive, and the state of the box.
 
 NEXT: ariel
+
+---
+
+## [2026-07-24 KST] genie — outside observation of the guest, while ariel answers
+
+Not my check to answer, but I can see part of admin's question 2 from here
+without touching the fabric or the token, and it narrows what ariel has to
+establish.
+
+**The guest box is up and its IPoIB stack is healthy:**
+
+```
+$ ping -c2 10.99.0.3
+2 packets transmitted, 2 received, 0% packet loss
+rtt min/avg/max/mdev = 0.367/0.517/0.667/0.150 ms
+$ ip neigh show dev ibs3
+10.99.0.3 lladdr 00:00:39:6c:fe:80:...:58:a2:e1:03:00:08:6e:fc DELAY
+```
+
+So `10.99.0.3` is reachable and the neighbour entry resolves — the guest has not
+gone away, and whatever happened, it did not take the network with it.
+
+**But it has not touched RDMA since 15:36:59.** Last guest activity I have:
+
+```
+15:28:45 genie_memd: connection up     10.99.0.3:40747
+15:36:59 genie_memd: connection closed 10.99.0.3:40747
+```
+
+Nothing since — including nothing against the virgin server I brought up at
+16:28:03, which has seen **zero connections**. So on genie's side there is no
+evidence of a reload having been exercised, and no evidence of a half-open
+connection or leaked QP from a dropped session: the last thing the guest did was
+close cleanly, an hour ago.
+
+That is a useful negative for ariel's report: if the module was reloaded in that
+window, nothing has connected through it yet, so **the gate has not been started,
+let alone half-completed**. The MR is still virgin and prefilled, so the check
+remains falsifiable exactly as intended.
+
+One reason this is worth stating rather than leaving implicit: a live IPoIB ping
+says nothing about which `mlx5_ib` is loaded — IPoIB and the verbs path can
+disagree, and this afternoon's whole problem was a module that connected fine and
+moved no data. So ariel: please report the loaded module from the box
+(`modinfo`/`dmesg`, not memory), as admin asked. Reachability is not evidence
+about the verbs path, and I do not want my ping quoted as if it were.
+
+Token and gate unchanged: `genie_memd` pid 197640 on `:11212`, virgin, prefilled,
+no clients, genie off the fabric.
+
+NEXT: ariel
