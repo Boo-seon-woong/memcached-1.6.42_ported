@@ -271,9 +271,18 @@ static void *extstore_io_thread(void *arg) {
                 sync_sg[nsync++] = (struct ibv_sge){ .addr = (uintptr_t)io->buf,
                     .length = io->len, .lkey = e->bounce_mr->lkey };
         }
-        if (nsync)
-            ibv_advise_mr(e->pd, IBV_ADVISE_MR_ADVICE_SYNC_FOR_CPU,
-                          IBV_ADVISE_MR_FLAG_FLUSH, sync_sg, nsync);
+        if (nsync) {
+            /* Return was ignored: if the driver does not implement ADVISE (some
+             * do return EOPNOTSUPP), reads see whatever is in the bounce buffer
+             * and the failure only shows up later as GCM tag mismatches. Warn
+             * once so that is diagnosable instead of silent. */
+            int adv = ibv_advise_mr(e->pd, IBV_ADVISE_MR_ADVICE_SYNC_FOR_CPU,
+                                    IBV_ADVISE_MR_FLAG_FLUSH, sync_sg, nsync);
+            static _Atomic int advise_warned;
+            if (adv && !atomic_exchange(&advise_warned, 1))
+                fprintf(stderr, "extstore: ibv_advise_mr(SYNC_FOR_CPU) failed: %s"
+                        " — bounce reads are not being synced\n", strerror(adv));
+        }
 
         for (int i = 0; i < c; i++) {
             obj_io *io = (obj_io *)(uintptr_t)wc[i].wr_id;

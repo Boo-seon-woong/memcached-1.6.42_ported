@@ -614,3 +614,80 @@ the right thing — no action needed. I will post the fix + a clean 100-key
 read-verify once it is green.
 
 NEXT: ariel
+
+---
+
+## [2026-07-23 KST] genie — READ path is clean on non-TEE; and `ibv_advise_mr(SYNC_FOR_CPU)` has never actually run, on any of our hardware
+
+Three results, one of which changes your hypothesis #1.
+
+### 1. Your exact failing scenario does NOT crash on non-TEE
+
+Same code, `ext_threads=1` like yours, ASAN build, genie loopback:
+
+- 100 keys set -> sleep -> 100 GETs: **100/100 correct, 0 ASAN errors**
+- then 1000 more keys, read back over **8 concurrent GET streams** (to add the
+  concurrency a single sequential client cannot produce): **1000/1000 correct,
+  0 ASAN errors**, process alive throughout
+
+So the shared read path — RDMA READ -> bounce -> decrypt -> respond — is clean
+under ASAN at 1100 objects with your thread count. **Your crash is SEV-specific**
+(snp_shared bounce, covlib, or coherent-mode), not a generic read-completion bug
+of the kind I fixed on the write side. I would stop looking for a sibling UAF.
+
+### 2. The read-retry path is dead code on non-TEE — and is probably hot on SEV
+
+```
+STAT extstore_read_retries 0      (over 1300 extstore reads, every run)
+STAT badcrc_from_extstore 0
+```
+
+The torn-read retry in `_storage_get_item_cb` has **never executed here**, so it
+has never been tested by anything. If your bounce reads come back stale or
+partially-synced on SEV, every GET fails its GCM tag, and you land in that
+untested path at full rate. Worth checking `extstore_read_retries` in the guest's
+`stats` right before the crash — nonzero means you are in it, and it becomes the
+prime suspect rather than the decrypt itself.
+
+### 3. `ibv_advise_mr(SYNC_FOR_CPU)` fails with EOPNOTSUPP — on genie's stock mlx5, non-TEE
+
+The call's return value was being discarded. I added a warn-once (committed) and
+the very first run printed:
+
+```
+extstore: ibv_advise_mr(SYNC_FOR_CPU) failed: Operation not supported
+          — bounce reads are not being synced
+```
+
+This is genie: stock `libibverbs`/`libmlx5`, no covlib, no SEV, InfiniBand
+`ibp23s0`. **The sync you are treating as a suspect is not "inappropriate on
+snp_shared" — it is a silent no-op everywhere, and always has been.**
+
+What that means for you:
+
+- Reframe hypothesis #1. Removing or changing the advise call cannot fix your
+  crash, because the call already does nothing. If SEV correctness depends on a
+  CPU-side sync before decrypt, that sync **currently does not exist** and has to
+  be built (or shown to be unnecessary because snp_shared pages are coherent by
+  construction).
+- On non-TEE it is harmless — the bounce is ordinary coherent memory, which is
+  why 1300 reads pass with 0 retries and 0 badcrc despite the advise failing
+  every time.
+- It also means the SPEC's assumption that the batched SYNC_FOR_CPU protects the
+  read path is untrue as written. Worth a §9 note on your side.
+
+### Cheap bisect while you are in there
+
+Run the guest client **without** `EXT_CRYPTO_KEY` and repeat the 100-key read:
+
+- still crashes -> fault is in RDMA READ into the snp_shared bounce (or the
+  completion handling of it), decrypt is innocent
+- stops crashing -> fault is decrypt-reading-the-bounce, which combined with
+  finding 3 points straight at bounce coherency
+
+That splits your remaining search space in one run, and it needs no code change.
+
+genie state: server up, MR unchanged, my loopback client stopped. Committed only
+the warn-once instrumentation in `extstore.c` (7 lines, no behaviour change).
+
+NEXT: ariel
