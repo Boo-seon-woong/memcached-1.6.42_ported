@@ -18,6 +18,8 @@
 #include <sys/mman.h>
 #include <netinet/in.h>
 #include <arpa/inet.h>
+#include <signal.h>
+#include <errno.h>
 #include <rdma/rdma_cma.h>
 
 struct xrd_mr_info { uint64_t raddr; uint32_t rkey; uint64_t size; } __attribute__((packed));
@@ -48,6 +50,32 @@ static uint64_t parse_size(const char *s) {
     }
 }
 
+/* SIGUSR1: dump what the clients' RDMA WRITEs actually landed in the MR.
+ * The server is passive and never touches the memory itself, so this is the only
+ * way to answer "did the write reach genie, or did the client only think it did".
+ * Reports the first non-zero regions and how much of the MR is non-zero. */
+static volatile sig_atomic_t g_dump;
+static void on_usr1(int s) { (void)s; g_dump = 1; }
+
+static void dump_mr(const unsigned char *m, uint64_t size) {
+    if (!m) { fprintf(stderr, "genie_memd: dump: MR not registered yet\n"); return; }
+    uint64_t nonzero = 0, shown = 0;
+    for (uint64_t i = 0; i < size; i++) {
+        if (!m[i]) continue;
+        nonzero++;
+        if (shown < 3 && (i == 0 || !m[i - 1])) {   /* start of a non-zero run */
+            fprintf(stderr, "genie_memd: dump: offset 0x%lx:", (unsigned long)i);
+            for (int k = 0; k < 32 && i + k < size; k++)
+                fprintf(stderr, " %02x", m[i + k]);
+            fprintf(stderr, "\n");
+            shown++;
+        }
+    }
+    fprintf(stderr, "genie_memd: dump: %lu of %lu bytes non-zero (%.4f%%)\n",
+            (unsigned long)nonzero, (unsigned long)size,
+            size ? 100.0 * (double)nonzero / (double)size : 0.0);
+}
+
 int main(int argc, char **argv) {
     if (argc < 3) dief("usage: genie_memd <port> <size> [--hugepages]");
     int port = atoi(argv[1]);
@@ -72,12 +100,22 @@ int main(int argc, char **argv) {
     void *mem = NULL;
     struct xrd_mr_info info = { 0, 0, size };
 
-    fprintf(stderr, "genie_memd: listening on :%d, size=%lu%s\n",
-            port, (unsigned long)size, huge ? " (hugepages)" : "");
+    /* no SA_RESTART: SIGUSR1 must break rdma_get_cm_event out so we can dump */
+    struct sigaction sa_usr1 = { .sa_handler = on_usr1 };
+    sigaction(SIGUSR1, &sa_usr1, NULL);
+
+    fprintf(stderr, "genie_memd: listening on :%d, size=%lu%s (kill -USR1 %d to dump MR)\n",
+            port, (unsigned long)size, huge ? " (hugepages)" : "", (int)getpid());
 
     while (1) {
         struct rdma_cm_event *ev;
-        if (rdma_get_cm_event(ch, &ev)) dief("rdma_get_cm_event");
+        if (rdma_get_cm_event(ch, &ev)) {
+            if (errno == EINTR) {       /* a signal, not a failure */
+                if (g_dump) { g_dump = 0; dump_mr(mem, size); }
+                continue;
+            }
+            dief("rdma_get_cm_event");
+        }
 
         if (ev->event == RDMA_CM_EVENT_CONNECT_REQUEST) {
             struct rdma_cm_id *cid = ev->id;
