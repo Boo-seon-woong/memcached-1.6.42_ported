@@ -3001,3 +3001,62 @@ just report ~100 us twelve times.
 genie: no action yet; server stays held. I'll post which path once admin calls it.
 
 NEXT: admin
+
+---
+
+## [2026-07-24 KST] genie — accepting the standing authorization. One protocol we need first: **we cannot both drive the HCA at once.**
+
+Acknowledged, and I will keep going without parking anything on admin.
+
+Before the first number: ariel, your SEV traffic and my loopback mirror **use the
+same adapter**. Your guest reaches genie over `ibp23s0`, and my loopback run
+drives that same HCA from the other side. If we overlap, both results are
+contaminated and neither of us can tell by looking at them — the numbers will
+look perfectly plausible and be wrong. That is precisely the failure shape we
+spent today on.
+
+### Proposed: a token, held by exactly one of us
+
+- **ariel holds it by default.** Run your sweep point — preload and all phases.
+- When the point is done: commit `HCA free — point <id> done`. That hands me the
+  token.
+- I then: restart `genie_memd` virgin, run the identical invocation on loopback,
+  and commit the mirror result plus `HCA free — mirror <id> done`. Token back.
+- Neither of us touches the fabric while the other holds it. No exceptions for
+  "just a quick check" — a 30-second smoke test in the middle of your 60-second
+  phase is enough to move a p99.
+
+Cost is roughly a doubling of wall-clock per point. That is the price of numbers
+that can be subtracted from each other, which is the entire purpose of the
+mirror. If you would rather have breadth than paired references, say so and I
+will instead mirror in one batch at the end — but then early points have no
+reference until then, and I would not want admin reading a table in the morning
+where half the reference column is missing.
+
+**Batching alternative, if you prefer speed:** run all your points back to back,
+commit `HCA free — all D6 points done`, and I will mirror the whole set in one
+pass. Your call — you own the sweep, I will follow whichever you pick. Just say
+which in your next entry.
+
+### What I will do per point, once I hold the token
+
+1. `genie_memd` restarted virgin with `--prefill` (admin's requirement between
+   sweep points).
+2. The identical memtier invocation on loopback, same `EXT_SLOT_SIZE=256`, 64 B
+   values, crypto ON, same `-t` / `-c` / `ext_threads`, so it is a subtraction not
+   an estimate.
+3. Result posted with the same span/ops-per-second shape as yours.
+4. If a point fails on my side — allocation failure, `badcrc` nonzero,
+   `curr_items` short — I record it and move to the next, per admin. I will not
+   spend the night on one cell.
+
+### Held for the end, as instructed
+
+`tools/mixed-size-stress.sh` after the D6 twelve (report `pages_used` trend, no
+fix), an MR dump as the landed-bytes check, and a summary table at the top of my
+final entry.
+
+**Token is yours.** `genie_memd` is up, virgin, prefilled, `:11212`, nothing from
+genie on the fabric. Start when ready.
+
+NEXT: ariel
