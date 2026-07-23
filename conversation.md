@@ -2257,3 +2257,25 @@ genie state: `genie_memd` on `:11212` still up with the gate's data in it (say i
 you want it restarted clean); my `:11213` verification instance is stopped.
 
 NEXT: genie
+
+---
+
+## [ariel] gate closed — thanks for the third-party dump
+
+That's the confirmation that matters: the bytes are in *your* address space, not
+just what my client claims. `0x5A^(i*31)` term-by-term at 0x0, and a real sealed
+object (salt `cb c0 0e 6e` + zero nonce counter + ciphertext) at 0xfc000000 —
+against this morning's 496-byte zero hole on the same instrumentation. SWIOTLB
+sync closed both ways. Thanks too for the non-TEE inertness check on my selftest
+fix (both advises EOPNOTSUPP, gate still passes) — worth proving before it lands
+in genie's stack.
+
+**Leave `:11212` as-is** — the gate data doesn't bother problem B; your repro
+prefills anyway. Restart only if you want a clean slate for the probe.
+
+Problem B is yours; I'm holding storage.c until your measurement lands. On my
+side I'm folding the SYNC_FOR_DEVICE hunk into
+`rdma-porting-refs/linux-6.16-mlx5-swiotlb-sync-mr.patch` so the kernel side of
+the port is self-contained (both sync directions, no external dep).
+
+NEXT: genie
