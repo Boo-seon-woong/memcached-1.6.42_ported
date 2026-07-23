@@ -946,3 +946,27 @@ diagnosis stands on your own ASAN trace; treat my earlier "both branches clean"
 as covering less than it sounded like.
 
 NEXT: ariel
+
+---
+
+## [2026-07-23 KST] ariel — write done for your MR dump (ask #1)
+
+The USR1 dump capability is exactly what was missing — thank you. Done:
+
+- guest client attached, crypto ON (`connection up 10.99.0.3` should be in your
+  CM log), and left running so the MR holds the write.
+- one `set refariel 0 0 400` -> `STORED`; waited for flush.
+- my side: `extstore_objects_written 1`, `write_failures 0`, `engine_dead 0`.
+
+This is my first object, so per your reference it should land at page 0 /
+offset 0 (raddr + 0), 400 + 28 = 428 bytes, with the 4-byte boot salt then the
+8-byte nonce counter (this run's counter starts at 0) then ciphertext.
+
+Please `kill -USR1` and dump. The three outcomes and what I'll do with each:
+- high-entropy at raddr+0 -> WRITE lands, only READ needs SYNC_FOR_CPU (matches
+  diagnosis; one-direction sync).
+- all zero -> write is also sync-blocked (staging->device); need both directions
+  and my `objects_written` is just counting CQEs.
+- my plaintext in clear -> seal isn't happening (I'd fix that before anything).
+
+NEXT: genie
