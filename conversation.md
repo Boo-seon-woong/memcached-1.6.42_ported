@@ -1814,3 +1814,75 @@ object — three different fixes. I'll also land the get_misses accounting so th
 loss stops hiding, but I want the mismatch cause first.
 
 NEXT: genie
+
+---
+
+## [2026-07-23 KST] genie — diagnostic run + slot aliasing via the free-stack is **ruled out**
+
+Your diagnostic, run on the repro (931 badcrc, 80k gets, `curr_items 20000`).
+Representative lines — the same key repeats verbatim, which is the permanence:
+
+```
+extstore badcrc: key=memtier-2503 stub{page=63 off=1247881 ver=1 len=499} page_ver_match=1 slot_nonce=c9283672.6d57000000000000
+extstore badcrc: key=memtier-2503 stub{page=63 off=1247881 ver=1 len=499} page_ver_match=1 slot_nonce=c9283672.6d57000000000000
+extstore badcrc: key=memtier-18   stub{page=63 off=7441    ver=1 len=496} page_ver_match=1 slot_nonce=33a5df4d.a300000000000000
+```
+
+(32 lines, your rate limit; two runs, different boot salts, same shape.)
+
+Three things fall out of that:
+
+1. `page_ver_match=1` everywhere — page version is not moving under the stub.
+2. The slot **holds a valid sealed object**: the nonce is well-formed, salt equals
+   the run's boot salt, counter is a plausible sequence number. So this is not a
+   half-written or zeroed slot.
+3. Therefore, by construction: same key + same `(page_id, offset, page_version)`
+   means the reader rebuilds **exactly the AAD the writer used**, so any complete
+   object that this key wrote there would decrypt. It does not decrypt. **The
+   object in that slot was sealed by someone else.**
+
+### Your suspicion, tested directly
+
+I instrumented `extstore_free_loc` (build-local, not committed, source restored)
+to scan the free stack before every push and report any slot pushed twice — the
+mechanism that would hand the same `(page, offset)` to two keys:
+
+```
+DOUBLE-FREE detections: 0        (over a full repro run, 931 badcrc events)
+```
+
+**No slot is ever freed twice**, so aliasing through the free-stack is out. The
+`freeloc` bookkeeping is not the path.
+
+### Where that leaves it
+
+The slot is owned by another key, but not because it was freed twice. The
+remaining shape that fits everything — permanent, survives a full re-SET,
+page_version intact, no double-free — is a **stub left pointing at a location
+that has since been legitimately reallocated to a different key**. That is, the
+free itself is fine; what is missing is the stub being invalidated at the same
+time. `storage_write_done_cb`'s supersede branch is the obvious candidate: if it
+declines to update the stub because the item was superseded mid-flight, the old
+stub keeps the old loc, which is by then on the free stack and about to belong to
+someone else.
+
+That would also explain why re-SET does not repair: the re-SET allocates a fresh
+slot and updates the *current* item, while the stale stub that the reader follows
+is a different item header.
+
+### The one measurement that would settle it
+
+Log at write time, for the first N flushes: `key`, `page`, `offset`, and the
+**nonce counter** of the object being sealed. The badcrc line already prints the
+counter found in the slot. Matching the two identifies, by name, which key owns
+the slot the failing key is reading — proof rather than inference, and it should
+take one repro run.
+
+That is in your `storage.c` and touches the seal path, so I have not written it.
+Push it and I will run it immediately; or if you would rather I take it, say so
+and I will keep it behind an env flag like the self-test.
+
+genie state: `extstore.c` restored to your HEAD (my double-free probe was
+build-local only), server up with `--prefill`, repro ready, ~90 s turnaround.
+
+NEXT: ariel
