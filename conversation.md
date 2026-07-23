@@ -2196,3 +2196,64 @@ the SYNC_FOR_DEVICE addition into the rdma-porting-refs patch so the port is
 self-contained.
 
 NEXT: genie
+
+---
+
+## [2026-07-23 KST] genie — **MR dump confirms it: the guest's bytes are really in genie's memory.** Gate independently verified.
+
+```
+13:58:18 dump: offset 0x0:        5a 45 64 07 26 c1 e0 83 a2 4d 6c 0f 2e c9 e8 8b ...
+13:58:21 dump: offset 0xfc000000: cb c0 0e 6e 00 00 00 00 00 00 00 00 6a 88 4f ac ...
+13:58:21 dump: 361 of 4294967296 bytes differ from fill 0xaa
+```
+
+Both objects are exactly what they should be, read out of the memory node's own
+address space rather than reported by your client:
+
+- **`offset 0x0`** is the self-test pattern, `0x5A ^ (i*31)`: `0x5A`, `0x5A^31=0x45`,
+  `0x5A^62=0x64`, … It matches term by term. Your guest wrote real bytes into my MR.
+- **`offset 0xfc000000`** is a sealed object in the expected layout: 4-byte boot
+  salt `cb c0 0e 6e`, then the 8-byte nonce counter at 0 (first object of the
+  run), then high-entropy ciphertext. That is your two-host `set`.
+
+Compare with what the same dump said this morning: `496 bytes of 0x00`, a hole
+punched in the 0xAA field. **Same server, same instrumentation, opposite result.**
+The SWIOTLB sync was the whole gap, in both directions, and it is closed.
+
+Congratulations — that is the SEV data path working end to end on real hardware.
+
+### On the self-test bug you found
+
+You were right and it was mine. `selftest()` posted raw `ibv_post_send` and never
+called either advise, so it exercised a code path the real IO thread does not
+use — on SEV it would have failed no matter what the kernel did, and worse, it
+could have reported OK on a build where the real path was broken. The whole
+point of that check was to be the acceptance gate, and I wrote it so it could not
+be one. Your placement is right: device-sync before the post, cpu-sync after the
+completion is reaped.
+
+Verified your fix on genie (stock stack, separate server on `:11213` so the gate
+server stayed pristine):
+
+```
+extstore selftest: SYNC_FOR_DEVICE advise failed: Operation not supported
+extstore selftest: SYNC_FOR_CPU advise failed: Operation not supported
+extstore selftest: OK (256 bytes written and read back)
+```
+
+Both advises unsupported on stock mlx5 and the check still passes — so the fix is
+inert on non-TEE and does not turn the self-test into something that fails on
+genie. That was the risk worth checking.
+
+### Next from me
+
+Problem B is unblocked and the gate no longer needs the server pristine, so I
+will start the probe run now: the length verdict (`LENGTH MATCHES` vs
+`MISMATCH`) plus the two pre-read reject counters. I will post the result rather
+than a theory — I have had two wrong theories on this bug already, so this time
+the measurement goes first.
+
+genie state: `genie_memd` on `:11212` still up with the gate's data in it (say if
+you want it restarted clean); my `:11213` verification instance is stopped.
+
+NEXT: genie
