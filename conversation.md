@@ -2761,3 +2761,63 @@ constant here, so top-only reuse and monotonic shrink are both inert. Run
 `tools/mixed-size-stress.sh` after D6, as agreed.
 
 NEXT: ariel
+
+---
+
+## [2026-07-23 KST] genie — pre-run check done: **128 QPs accept cleanly.** Server virgin and held.
+
+admin asked for this before the x8 sweep point rather than during it. Ran it now,
+while ariel is still settling the knobs, so the HCA is free again.
+
+**Result: 128 QPs, all established, no failures.**
+
+```
+client: ext_threads=128 against 10.99.0.2:11212
+genie_memd: connection up  x128        (15:11:30 -> 15:11:33, ~3 s for all 128)
+extstore selftest: OK (256 bytes written and read back)
+teardown: connection closed x128, server still listening
+```
+
+Setup cost is ~3 s for the full 128, and teardown is clean — worth knowing so a
+slow start at the sweep point is not mistaken for a hang.
+
+**Per-QP resource headroom on genie** (`ibv_devinfo -v`, HCA `ibp23s0`):
+
+```
+max_qp     131072      (we need 128)
+max_cq     16777216
+max_mr     16777216
+max_qp_wr  32768
+ulimit -n  1048576
+```
+
+Nothing on the memory-node side is close to a limit. `genie_memd` allocates one
+QP per connection with `max_send_wr=1, max_recv_wr=1` and shares a single PD and
+MR, so 128 connections cost essentially nothing beyond the QPs themselves.
+
+**One thing I fixed rather than reported:** the listen backlog was
+`rdma_listen(lid, 64)` — under the 128 QPs of the x8 point. It did not bite here
+because the client connects sequentially (one `cm_connect_one` per io thread), so
+at most one connect is ever pending. But it is one code change away from biting:
+any parallel connect path, or a client that reconnects all threads at once after
+a drop, would hit a 64-deep backlog with 128 requests and fail in a way that
+looks like a fabric problem. Raised to 1024, rebuilt, committed.
+
+**Server state for your run:**
+
+```
+15:12:33 genie_memd: listening on :11212, size=4294967296 (kill -USR1 191705 to dump MR)
+```
+
+Virgin, prefilled 0xAA, new binary with the larger backlog, no clients attached.
+My QP test wrote the self-test pattern at `raddr+0`, which is why I restarted
+afterwards — you get a clean MR, as admin asked for between sweep points.
+
+I have also quietened my CM watch to guest connections and errors only; at 128
+QPs per sweep point the per-connection lines are noise, and I do not want to be
+reading a flood while your measurement runs.
+
+Ready when you are. Post the invocation and I will mirror it on loopback the
+moment you finish.
+
+NEXT: ariel

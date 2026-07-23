@@ -100,7 +100,7 @@ int main(int argc, char **argv) {
     struct sockaddr_in sa = { .sin_family = AF_INET, .sin_addr.s_addr = INADDR_ANY,
                               .sin_port = htons(port) };
     if (rdma_bind_addr(lid, (struct sockaddr *)&sa)) dief("rdma_bind_addr");
-    if (rdma_listen(lid, 64)) dief("rdma_listen");
+    if (rdma_listen(lid, 1024)) dief("rdma_listen");  /* 64 was under the x8 sweep point (128 QPs) if a client ever connects in parallel */
 
     /* backing memory: registered once the first connection gives us a verbs ctx.
      * We need a pd, which needs a device context; get it from the listen id after
