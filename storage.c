@@ -22,6 +22,7 @@ static bool g_crypto_on = false;
 static unsigned int g_read_retries = 3;   // torn-read retry cap (EXT_READ_RETRIES)
 static _Atomic uint64_t g_read_retry_ct = 0;  // torn-read retries observed (debug)
 static _Atomic uint64_t g_read_reresolve_ct = 0;  // reads recovered from RAM after retry exhaustion
+static _Atomic uint64_t g_badcrc_log_ct = 0;      // rate-limit for the badcrc diagnostic
 
 // Write-path context carried across the async RDMA WRITE completion (P-2).
 typedef struct {
@@ -206,6 +207,20 @@ static void _storage_get_item_cb(void *e, obj_io *io, int ret) {
                 item_unlock(rhv);
                 miss = true;
                 p->badcrc = true;
+                // Diagnostic (genie's request): a permanently-unreadable key means
+                // the stub's AAD no longer matches the object in its slot. Log the
+                // expected loc, whether the page version still matches, and the
+                // slot's stored nonce (first 12B = boot_salt||counter, identifies
+                // which object actually lives there). First N only.
+                if (atomic_fetch_add(&g_badcrc_log_ct, 1) < 32) {
+                    const unsigned char *n = (const unsigned char *)io->buf;
+                    int pv_ok = (extstore_check(e, io->page_id, io->page_version) == 0);
+                    fprintf(stderr, "extstore badcrc: key=%.*s stub{page=%u off=%u ver=%u len=%u} "
+                        "page_ver_match=%d slot_nonce=%02x%02x%02x%02x.%02x%02x%02x%02x%02x%02x%02x%02x\n",
+                        p->hdr_it->nkey, ITEM_key(p->hdr_it),
+                        io->page_id, io->offset, io->page_version, io->len, pv_ok,
+                        n[0],n[1],n[2],n[3],n[4],n[5],n[6],n[7],n[8],n[9],n[10],n[11]);
+                }
                 // GCM writes the (unverified) plaintext into read_it BEFORE the
                 // tag check, so a failed open left read_it's header garbage;
                 // reset it_flags so slabs_free doesn't take the chunked path on a
