@@ -126,6 +126,8 @@ const char *extstore_err(enum extstore_res res) {
         case EXTSTORE_INIT_OOM: rv = "failed to allocate engine"; break;
         case EXTSTORE_INIT_OPEN_FAIL: rv = "failed to open RDMA device / connect genie"; break;
         case EXTSTORE_INIT_THREAD_FAIL: rv = "failed to spawn IO thread"; break;
+        case EXTSTORE_INIT_SELFTEST_FAIL:
+            rv = "remote memory self-test failed (see extstore selftest lines above)"; break;
         default: break;
     }
     return rv;
@@ -352,6 +354,69 @@ static void *extstore_io_thread(void *arg) {
 
 /* ---- init ---- */
 
+/* EXT_SELFTEST=1: write a known pattern to remote memory and RDMA READ it back
+ * before serving traffic. Exists because a write can succeed at every layer that
+ * reports status — clean CQE, objects_written++, no engine_dead — and still
+ * deposit zeros in the remote MR when the local buffer is not synced to the
+ * device (SEV SWIOTLB). Nothing else in this engine can see that; the data is
+ * only discovered to be garbage on read-back, long after the benchmark ran.
+ * Opt-in, so the client can still be brought up for connect/latency work while
+ * the kernel-side sync is missing. */
+static int selftest(store_engine *e) {
+    store_iothr *t = &e->io_threads[0];
+    unsigned int len = e->slot_size < 256 ? e->slot_size : 256;
+    unsigned char *src = (unsigned char *)e->staging_base;
+    unsigned char *dst = (unsigned char *)t->bounce_base;
+    for (unsigned int i = 0; i < len; i++) src[i] = (unsigned char)(0x5A ^ (i * 31));
+    memset(dst, 0, len);
+
+    /* page 0 offset 0: no object lives there yet (pages are handed out top-down) */
+    for (int pass = 0; pass < 2; pass++) {          /* 0 = WRITE out, 1 = READ back */
+        struct ibv_sge sg = { .addr = (uintptr_t)(pass ? dst : src), .length = len,
+            .lkey = pass ? e->bounce_mr->lkey : e->staging_mr->lkey };
+        struct ibv_send_wr *bad, wr = { .wr_id = (uint64_t)pass, .sg_list = &sg,
+            .num_sge = 1, .send_flags = IBV_SEND_SIGNALED,
+            .opcode = pass ? IBV_WR_RDMA_READ : IBV_WR_RDMA_WRITE };
+        wr.wr.rdma.remote_addr = e->raddr;
+        wr.wr.rdma.rkey = e->rkey;
+        if (ibv_post_send(t->qp, &wr, &bad)) {
+            fprintf(stderr, "extstore selftest: post_send(%s) failed: %s\n",
+                    pass ? "READ" : "WRITE", strerror(errno));
+            return -1;
+        }
+        struct ibv_wc wc;
+        int c = 0;
+        for (long spin = 0; spin < 500000000L && c == 0; spin++)
+            c = ibv_poll_cq(t->cq, 1, &wc);
+        if (c <= 0) {
+            fprintf(stderr, "extstore selftest: no completion for %s\n",
+                    pass ? "READ" : "WRITE");
+            return -1;
+        }
+        if (wc.status != IBV_WC_SUCCESS) {
+            fprintf(stderr, "extstore selftest: %s completed with status %s (%d)\n",
+                    pass ? "READ" : "WRITE", ibv_wc_status_str(wc.status), wc.status);
+            return -1;
+        }
+    }
+
+    if (memcmp(src, dst, len) == 0) {
+        fprintf(stderr, "extstore selftest: OK (%u bytes written and read back)\n", len);
+        return 0;
+    }
+    unsigned int i = 0;
+    while (i < len && src[i] == dst[i]) i++;
+    fprintf(stderr, "extstore selftest: FAILED — remote memory does not hold what "
+            "we wrote. First mismatch at byte %u: sent 0x%02x, read back 0x%02x.\n",
+            i, src[i], dst[i]);
+    fprintf(stderr, "extstore selftest: read-back is %s. Both transfers reported "
+            "success, so the transport works and the payload does not — on SEV this "
+            "is the SWIOTLB sync (SYNC_FOR_DEVICE on staging, SYNC_FOR_CPU on "
+            "bounce) missing from mlx5_ib.\n",
+            dst[i] == 0 ? "all zero (pre-DMA contents)" : "different data");
+    return -1;
+}
+
 void *extstore_init(struct extstore_conf_file *fh, struct extstore_conf *cf,
         enum extstore_res *res) {
     store_engine *e = calloc(1, sizeof(*e));
@@ -426,6 +491,10 @@ void *extstore_init(struct extstore_conf_file *fh, struct extstore_conf *cf,
     for (unsigned int i = 0; i < e->staging_count; i++)
         e->staging_free[i] = e->staging_base + (size_t)i * e->slot_size;
     e->staging_top = e->staging_count;
+
+    if (getenv("EXT_SELFTEST") && selftest(e) != 0) {
+        *res = EXTSTORE_INIT_SELFTEST_FAIL; goto fail;
+    }
 
     /* pages carve the remote MR */
     e->page_count = rsize / e->page_size;

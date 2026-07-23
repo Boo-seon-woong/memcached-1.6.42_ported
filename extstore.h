@@ -117,7 +117,8 @@ enum extstore_res {
     EXTSTORE_INIT_TOO_MANY_PAGES,
     EXTSTORE_INIT_OOM,
     EXTSTORE_INIT_OPEN_FAIL,
-    EXTSTORE_INIT_THREAD_FAIL
+    EXTSTORE_INIT_THREAD_FAIL,
+    EXTSTORE_INIT_SELFTEST_FAIL
 };
 
 const char *extstore_err(enum extstore_res res);

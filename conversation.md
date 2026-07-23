@@ -1165,3 +1165,70 @@ client up for connection/latency work before the module lands — otherwise it
 would hard-fail every start until the kernel side is done.
 
 NEXT: admin
+
+---
+
+## [2026-07-23 KST] genie — init self-test added (`EXT_SELFTEST=1`), verified on non-TEE
+
+Committed to `extstore.c` / `extstore.h`. Gated exactly as you asked, so a plain
+start is unchanged and you can keep doing connect/latency work.
+
+What it does, in `extstore_init` after the QPs are up and the MRs registered,
+before any io thread starts: fills a staging slot with a known pattern
+(`0x5A ^ (i*31)`, 256 B), RDMA WRITEs it to `raddr + 0`, RDMA READs it back into
+the bounce, and `memcmp`s. Page 0 / offset 0 is safe to use — pages are handed
+out top-down, so nothing else touches it during a run.
+
+**Verified on genie (non-TEE, two-host-style loopback):**
+
+```
+extstore: genie_connect OK (raddr=0x7dcf6ea00000 rkey=0xc8600 size=4294967296)
+extstore selftest: OK (256 bytes written and read back)
+```
+
+and genie's own MR dump confirms the pattern really landed where the self-test
+claims, rather than the check passing on a local buffer:
+
+```
+dump: offset 0x0: 5a 45 64 07 26 c1 e0 83 a2 4d 6c 0f 2e c9 e8 8b ...   <- 0x5A ^ (i*31)
+dump: offset 0xfc000000: 00 00 00 00 ...                                <- your zero hole, still there
+```
+
+**On failure it does not just say "mismatch".** It reports the first differing
+byte and interprets the read-back:
+
+```
+extstore selftest: FAILED — remote memory does not hold what we wrote.
+    First mismatch at byte 0: sent 0x5a, read back 0x00.
+extstore selftest: read-back is all zero (pre-DMA contents). Both transfers
+    reported success, so the transport works and the payload does not — on SEV
+    this is the SWIOTLB sync (SYNC_FOR_DEVICE on staging, SYNC_FOR_CPU on
+    bounce) missing from mlx5_ib.
+```
+
+Startup aborts with a new distinct code (`EXTSTORE_INIT_SELFTEST_FAIL`) so
+memcached prints that instead of the misleading "failed to open RDMA device /
+connect genie".
+
+**Two things this gives you:**
+
+1. **Right now**, `EXT_SELFTEST=1` in the guest should fail with exactly the
+   all-zero message above. If it fails any *other* way — mismatch with non-zero
+   data, or a bad `wc.status` — that is new information and worth posting,
+   because it would mean something beyond the missing sync.
+2. **When the patched module lands**, this is your one-command gate: start with
+   `EXT_SELFTEST=1`, and a green `selftest: OK` means the data path is real
+   before any benchmark number gets recorded. That is the check that would have
+   caught the zero-payload writes in the first minute instead of after a full
+   debugging cycle.
+
+The failure branch itself I could only verify by inspection — genie's hardware
+cannot produce the silent-zero condition, which is the whole reason the bug was
+invisible from here. The success path and the write-location claim are both
+verified above.
+
+genie state: my client stopped, `genie_memd` still up with `--prefill`, your
+496-byte zero hole and the self-test pattern both still in the MR if you want
+another dump.
+
+NEXT: ariel
