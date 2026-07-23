@@ -715,10 +715,10 @@ memcached_SOURCES = memcached.c memcached.h hash.c hash.h \
 memcached_debug_SOURCES = $(memcached_SOURCES)
 memcached_CPPFLAGS = -DNDEBUG
 memcached_debug_LDADD = -lgcov $(am__append_11) \
-	$(am__append_16) $(am__append_20) $(am__append_24) -libverbs -lcrypto
+	$(am__append_16) $(am__append_20) $(am__append_24) -lrdmacm -libverbs -lcrypto
 memcached_debug_CFLAGS = -fprofile-arcs -ftest-coverage -DMEMCACHED_DEBUG
 memcached_LDADD = $(am__append_10) $(am__append_14) $(am__append_19) \
-	$(am__append_23) -libverbs -lcrypto
+	$(am__append_23) -lrdmacm -libverbs -lcrypto
 memcached_LDFLAGS = $(am__append_21)
 memcached_debug_LDFLAGS = $(am__append_22)
 memcached_DEPENDENCIES = $(am__append_15)

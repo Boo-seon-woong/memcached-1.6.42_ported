@@ -193,15 +193,18 @@ static void *extstore_io_thread(void *arg) {
         if (e->local) {   /* memcpy transport (no RDMA); remote == local_mem */
             obj_io *batch = t->queue; t->queue = t->queue_tail = NULL;
             pthread_mutex_unlock(&t->mutex);
-            unsigned int reads = 0;
+            unsigned int reads = 0, writes = 0; uint64_t rb = 0, wb = 0;
             while (batch) {
                 obj_io *io = batch; batch = io->next;
                 char *rem = e->local_mem + e->pages[io->page_id].remote_off + io->offset;
-                if (io->mode == OBJ_IO_READ) { io->buf = rem; reads++; }
-                else memcpy(rem, io->buf, io->len);
+                if (io->mode == OBJ_IO_READ) { io->buf = rem; reads++; rb += io->len; }
+                else { memcpy(rem, io->buf, io->len); writes++; wb += io->len; }
                 io->cb(e, io, (int)io->len);
             }
-            STAT_L(e); e->stats.objects_read += reads; STAT_UL(e);
+            STAT_L(e);
+            e->stats.objects_read += reads;   e->stats.bytes_read += rb;
+            e->stats.objects_written += writes; e->stats.bytes_written += wb;
+            STAT_UL(e);
             continue;
         }
 
@@ -290,10 +293,17 @@ static void *extstore_io_thread(void *arg) {
             if (io->mode == OBJ_IO_READ) {
                 int s = (io->buf - t->bounce_base) / e->slot_size;
                 pthread_mutex_lock(&t->mutex); t->bounce_free |= 1ULL << s; pthread_mutex_unlock(&t->mutex);
+            } else if (ok) {
+                STAT_L(e);
+                e->stats.objects_written++; e->stats.bytes_written += io->len;
+                STAT_UL(e);
             }
         }
         pthread_mutex_lock(&t->mutex); t->outstanding -= c; pthread_mutex_unlock(&t->mutex);
-        STAT_L(e); e->stats.objects_read += nsync; STAT_UL(e);
+        STAT_L(e);
+        e->stats.objects_read += nsync;
+        for (int i = 0; i < nsync; i++) e->stats.bytes_read += sync_sg[i].length;
+        STAT_UL(e);
     }
     return NULL;
 }
