@@ -18,11 +18,33 @@
 #include <sched.h>
 #include <sys/socket.h>
 #include <sys/mman.h>
+#include <fcntl.h>
 #include <netinet/in.h>
 #include <arpa/inet.h>
 #include <infiniband/verbs.h>
 #include <rdma/rdma_cma.h>
 #include "extstore.h"
+
+/* DMA-registerable buffer. On SEV-SNP the passthrough NIC can only DMA SHARED
+ * (unencrypted) memory, so the read-bounce and write-staging pools must come
+ * from /dev/snp_shared. On non-TEE hosts that device is absent, so fall back to
+ * anonymous mmap (keeps the genie loopback path working). §9 / P-3(a). */
+static char *dma_alloc(size_t sz) {
+    int fd = open("/dev/snp_shared", O_RDWR);
+    if (fd >= 0) {
+        void *p = mmap(NULL, sz, PROT_READ | PROT_WRITE, MAP_SHARED, fd, 0);
+        /* keep fd open: the shared region is tied to it. one-time init leak. */
+        if (p != MAP_FAILED) {
+            fprintf(stderr, "extstore: dma_alloc %zuB from /dev/snp_shared\n", sz);
+            return p;
+        }
+        fprintf(stderr, "extstore: snp_shared mmap(%zuB) failed: %s; using anon\n",
+                sz, strerror(errno));
+        close(fd);
+    }
+    void *p = mmap(NULL, sz, PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
+    return p == MAP_FAILED ? NULL : p;
+}
 
 /* Custom advice added by the SEV SWIOTLB-sync kernel patch (rdma-porting-refs/).
  * Builds against stock headers; unpatched libibverbs returns an error we tolerate. */
@@ -117,7 +139,11 @@ static int cm_wait(struct rdma_event_channel *ch, enum rdma_cm_event_type want,
                    struct rdma_cm_event **out) {
     struct rdma_cm_event *ev;
     if (rdma_get_cm_event(ch, &ev)) return -1;
-    if (ev->event != want) { rdma_ack_cm_event(ev); return -1; }
+    if (ev->event != want) {
+        fprintf(stderr, "extstore rdma_cm: expected %s but got %s (status %d)\n",
+                rdma_event_str(want), rdma_event_str(ev->event), ev->status);
+        rdma_ack_cm_event(ev); return -1;
+    }
     if (out) *out = ev; else rdma_ack_cm_event(ev);
     return 0;
 }
@@ -127,31 +153,33 @@ static int cm_wait(struct rdma_event_channel *ch, enum rdma_cm_event_type want,
 static int cm_connect_one(store_engine *e, struct sockaddr *dst, unsigned int ti,
                           bool first, uint64_t *size_out) {
     store_iothr *t = &e->io_threads[ti];
+#define CM_FAIL(step) do { fprintf(stderr, "extstore rdma_cm: %s failed (thread %u): %s\n", \
+        step, ti, strerror(errno)); return -1; } while (0)
     struct rdma_event_channel *ch = rdma_create_event_channel();
-    if (!ch) return -1;
-    if (rdma_create_id(ch, &t->cm_id, NULL, RDMA_PS_TCP)) return -1;
-    if (rdma_resolve_addr(t->cm_id, NULL, dst, CM_TIMEOUT_MS) ||
-        cm_wait(ch, RDMA_CM_EVENT_ADDR_RESOLVED, NULL)) return -1;
-    if (rdma_resolve_route(t->cm_id, CM_TIMEOUT_MS) ||
-        cm_wait(ch, RDMA_CM_EVENT_ROUTE_RESOLVED, NULL)) return -1;
+    if (!ch) CM_FAIL("create_event_channel");
+    if (rdma_create_id(ch, &t->cm_id, NULL, RDMA_PS_TCP)) CM_FAIL("create_id");
+    if (rdma_resolve_addr(t->cm_id, NULL, dst, CM_TIMEOUT_MS)) CM_FAIL("resolve_addr");
+    if (cm_wait(ch, RDMA_CM_EVENT_ADDR_RESOLVED, NULL)) CM_FAIL("ADDR_RESOLVED event");
+    if (rdma_resolve_route(t->cm_id, CM_TIMEOUT_MS)) CM_FAIL("resolve_route");
+    if (cm_wait(ch, RDMA_CM_EVENT_ROUTE_RESOLVED, NULL)) CM_FAIL("ROUTE_RESOLVED event");
 
     if (first) {
         e->pd = ibv_alloc_pd(t->cm_id->verbs);
-        if (!e->pd) return -1;
+        if (!e->pd) CM_FAIL("alloc_pd");
     }
     t->cq = ibv_create_cq(t->cm_id->verbs, e->io_depth * 2, NULL, NULL, 0);
-    if (!t->cq) return -1;
+    if (!t->cq) CM_FAIL("create_cq");
     struct ibv_qp_init_attr ia = { .send_cq = t->cq, .recv_cq = t->cq,
         .qp_type = IBV_QPT_RC, .cap = { .max_send_wr = e->io_depth + 1,
             .max_recv_wr = 1, .max_send_sge = 1, .max_recv_sge = 1 } };
-    if (rdma_create_qp(t->cm_id, e->pd, &ia)) return -1;
+    if (rdma_create_qp(t->cm_id, e->pd, &ia)) CM_FAIL("create_qp");
     t->qp = t->cm_id->qp;
 
     struct rdma_conn_param cp = { .responder_resources = 16, .initiator_depth = 16,
         .retry_count = 7, .rnr_retry_count = 7 };
     struct rdma_cm_event *ev;
-    if (rdma_connect(t->cm_id, &cp) ||
-        cm_wait(ch, RDMA_CM_EVENT_ESTABLISHED, &ev)) return -1;
+    if (rdma_connect(t->cm_id, &cp)) CM_FAIL("connect");
+    if (cm_wait(ch, RDMA_CM_EVENT_ESTABLISHED, &ev)) CM_FAIL("ESTABLISHED event");
     if (first) {
         if (ev->param.conn.private_data_len < sizeof(struct xrd_mr_info)) {
             rdma_ack_cm_event(ev); return -1;
@@ -362,17 +390,16 @@ void *extstore_init(struct extstore_conf_file *fh, struct extstore_conf *cf,
         goto pages_setup;
     }
 
-    /* allocate the read/write buffers (registration happens after we have a pd) */
+    /* read-bounce + write-staging pools (SEV: shared memory; §9). Registration
+     * happens after we have a pd from the connection. */
     size_t bsz = (size_t)e->io_threadcount * e->read_slots * e->slot_size;
-    char *bbase; if (posix_memalign((void **)&bbase, 4096, bsz)) { *res = EXTSTORE_INIT_OOM; goto fail; }
+    char *bbase = dma_alloc(bsz);
+    if (!bbase) { *res = EXTSTORE_INIT_OOM; goto fail; }
 
-    /* staging pool (write source). ponytail: plain mmap here; on the SEV guest
-     * this must be snp_shared (WC/shared) memory — see rdma-porting-refs. */
     e->staging_count = cf->write_slots ? cf->write_slots : 256;
     size_t ssz = (size_t)e->staging_count * e->slot_size;
-    e->staging_base = mmap(NULL, ssz, PROT_READ | PROT_WRITE,
-                           MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
-    if (e->staging_base == MAP_FAILED) { *res = EXTSTORE_INIT_OOM; goto fail; }
+    e->staging_base = dma_alloc(ssz);
+    if (!e->staging_base) { *res = EXTSTORE_INIT_OOM; goto fail; }
 
     /* per-thread state, then connect all QPs via rdma_cm (sets e->pd, e->raddr) */
     e->io_threads = calloc(e->io_threadcount, sizeof(store_iothr));
@@ -386,10 +413,14 @@ void *extstore_init(struct extstore_conf_file *fh, struct extstore_conf *cf,
     }
     uint64_t rsize = 0;
     if (genie_connect(e, fh->file, fh->cport, &rsize)) { *res = EXTSTORE_INIT_OPEN_FAIL; goto fail; }
+    fprintf(stderr, "extstore: genie_connect OK (raddr=0x%lx rkey=0x%x size=%lu)\n",
+            (unsigned long)e->raddr, e->rkey, (unsigned long)rsize);
 
     /* register MRs on the connection's pd */
     e->bounce_mr = ibv_reg_mr(e->pd, bbase, bsz, IBV_ACCESS_LOCAL_WRITE);
+    if (!e->bounce_mr) fprintf(stderr, "extstore: reg_mr(bounce %zuB) failed: %s\n", bsz, strerror(errno));
     e->staging_mr = ibv_reg_mr(e->pd, e->staging_base, ssz, IBV_ACCESS_LOCAL_WRITE);
+    if (!e->staging_mr) fprintf(stderr, "extstore: reg_mr(staging %zuB) failed: %s\n", ssz, strerror(errno));
     if (!e->bounce_mr || !e->staging_mr) { *res = EXTSTORE_INIT_OPEN_FAIL; goto fail; }
     e->staging_free = malloc(sizeof(char *) * e->staging_count);
     for (unsigned int i = 0; i < e->staging_count; i++)

@@ -186,6 +186,12 @@ static void _storage_get_item_cb(void *e, obj_io *io, int ret) {
             }
             miss = true;
             p->badcrc = true;
+            // GCM writes the (unverified) plaintext into read_it BEFORE the tag
+            // check, so a failed open leaves read_it's header garbage. It is only
+            // going to be freed now — reset it_flags so slabs_free doesn't take
+            // the chunked path on a bogus header (ASAN SEGV, slabs.c:468).
+            read_it->it_flags = 0;
+            read_it->slabs_clsid = p->read_clsid;
         }
     } else {
         memcpy(read_it, io->buf, io->len);   // crypto off: io->len == ntotal
