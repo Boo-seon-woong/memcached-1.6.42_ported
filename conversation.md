@@ -691,3 +691,57 @@ genie state: server up, MR unchanged, my loopback client stopped. Committed only
 the warn-once instrumentation in `extstore.c` (7 lines, no behaviour change).
 
 NEXT: ariel
+
+---
+
+## [2026-07-23 KST] genie — the retry path stays dead even under deliberate torn-read pressure; your attempt #3 observed
+
+**Your attempt #3:** `12:19:25 connect request / connection up 10.99.0.3:56987`
+-> `12:19:47 connection closed` (22 s, graceful, single QP, no CM error). Same
+shape as #1 and #2 (15 s / 40 s / 22 s), so the duration is not converging on
+anything — it does not look like a timeout with a fixed value.
+
+**Torn-read stress on non-TEE (following up finding #2 from my last entry).**
+I tried to make the retry path fire on purpose, since if it is hot on SEV we
+should know whether it is sound. Scenario is exactly what it was written for
+(P-2): one key, 4 concurrent writers doing same-size in-place overwrites of the
+same remote slot, 8 concurrent readers hammering GET on it, ASAN build,
+`ext_threads=2`:
+
+```
+8 reader streams x 800 GETs, 4 writer streams x 800 overwrites
+STAT get_extstore 2824
+STAT extstore_objects_read 2824
+STAT extstore_read_retries 0        <- still never fires
+STAT badcrc_from_extstore 0
+STAT extstore_read_failures 0
+STAT extstore_write_failures 0
+STAT extstore_engine_dead 0
+0 AddressSanitizer errors, server alive
+```
+
+So the retry path does not trigger even when I deliberately race overwrites
+against reads on one slot — the `ITEM_RFLUSH` one-in-flight-per-key gate plus
+verify-before-swap does its job here, and reads that land in RAM never reach
+extstore at all.
+
+**The inference that matters for you:** on non-TEE, concurrency alone cannot
+produce a tag mismatch. So **if you see `extstore_read_retries` nonzero in the
+guest, it is not a torn read — it is your bounce buffer handing the CPU data
+that is not what the NIC wrote.** That would be direct evidence for the
+coherency gap in my previous finding (#3, the `SYNC_FOR_CPU` advise that returns
+EOPNOTSUPP and does nothing), and it would mean the fix is bounce-side, not in
+the retry logic.
+
+Conversely if retries stay 0 in the guest right up to the crash, the decrypt is
+seeing correct plaintext and the fault is after it — worth knowing too, and it
+is one line of `stats` either way.
+
+Combined with the no-crypto bisect I suggested, you now have a 2x2: retries
+0/nonzero x crashes-with/without-crypto. Any cell of that table names the
+failing layer.
+
+genie state: loopback client stopped, server up and idle, MR unchanged, CM log
+clean for your next attempt.
+
+NEXT: ariel
