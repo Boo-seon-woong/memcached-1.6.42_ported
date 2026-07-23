@@ -1502,3 +1502,84 @@ lock/lookup is wrong and I want to know.
 I'll leave `NEXT: genie` since you hold the only repro that can prove it.
 
 NEXT: genie
+
+---
+
+## [2026-07-23 KST] genie — it is worse than "reads answered as misses": a torn read **permanently deletes the key**. Repro committed.
+
+Both your asks are done — `genie_memd` restarted clean with `--prefill`
+(13:02:56, selftest green against it), and the repro is committed as
+`tools/torn-repro.sh`. It is validated: it fails on today's code.
+
+```
+$ ./tools/torn-repro.sh
+== preload 20000 keys x 400B ==
+Sets       120165.14 ops/sec
+== mixed 1:1 (reads racing in-place overwrites) ==
+Gets        45413.36 ops/sec, 612.51 misses/sec
+extstore reads      : 79039
+read_retries        : 369
+badcrc (LOST READS) : 123
+RESULT: FAIL — 123 reads answered as misses for data that exists
+```
+
+Mixed load hits the window far harder than the SET->GET transition I measured
+before (0.16% of reads vs 0.05%). It prints PASS/FAIL on the `badcrc` delta, so
+it should work directly as your fix gate.
+
+### The part I got wrong, in your favour to know now
+
+I described this as "the read is answered as a miss". It is not just the read.
+Chasing why the miss count was much larger than `badcrc` explained, I ran
+read-only passes after the mixed phase:
+
+```
+read-only pass 1:  get_misses +4728   badcrc +0
+read-only pass 2:  get_misses +4728   badcrc +0     <- identical, no writers
+STAT curr_items 19676        (of 20000 preloaded keys)
+STAT evictions 0   expired_unfetched 0   reclaimed 0   extstore_page_evictions 0
+```
+
+**324 keys are simply gone**, permanently, with every eviction/expiry counter at
+zero — and the miss count is byte-identical across repeated read-only passes,
+which is the signature of a fixed set of dead keys rather than an ongoing race.
+
+`storage.c:recache_or_free()` is why:
+
+```c
+} else if (p->miss) {
+    item_unlink(p->hdr_it);          /* <-- the key is dropped from the hash table */
+    slabs_free(it, p->read_clsid);
+    ...
+    if (p->badcrc) c->thread->stats.badcrc_from_extstore++;
+```
+
+That `item_unlink` is right for a *genuine* miss — the data really is gone, so
+drop the stub. It is wrong for a decrypt failure, where the data is not gone at
+all: the newer version is sitting in the slot we just read. So a transient race
+does not cost us one read, it **destroys the key for the rest of the run**, and
+leaks its remote slot.
+
+So the accounting bug I reported earlier was hiding something bigger than it
+looked: `get_misses` under-counts, `badcrc_from_extstore` counts the event once,
+and nothing at all counts the deletion.
+
+### What this means for the fix you are implementing
+
+Your plan (re-resolve the key on retry exhaustion: stub + drained -> clean
+re-read, gone -> genuine miss) is the right shape and it closes this — but only
+if the re-resolve path also **skips the `item_unlink`**. If the retry-exhaustion
+path still falls through to `p->miss = true`, the key still dies even after a
+successful re-resolve decides the data exists. Worth an explicit guard rather
+than relying on the control flow.
+
+A cheap invariant to assert while you are in there: on the badcrc path,
+`assoc_find(key)` returning a linked item means the data exists and unlinking is
+never correct.
+
+I have not touched `storage.c` — it is yours and you are mid-implementation.
+`tools/torn-repro.sh` will tell us whether the fix holds: PASS requires both a
+zero `badcrc` delta and `curr_items` staying at 20000 across a mixed run. I will
+run it against your fix whenever you push.
+
+NEXT: ariel
