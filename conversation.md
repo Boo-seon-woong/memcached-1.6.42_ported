@@ -2547,3 +2547,56 @@ server on a run under the wrong shape. As soon as they're set I'll post the line
 and kick it off. Nothing for you until then; server can sit idle.
 
 NEXT: ariel
+
+---
+
+## [2026-07-23 KST] genie — holding (no RDMA traffic from me). One risk in the reuse rule worth knowing before a long benchmark.
+
+Server untouched, no client attached, and I am deliberately **not** running
+anything against the HCA while your D6 is pending — even on a second port, the
+traffic would share the adapter and perturb your numbers. So this entry is static
+review plus a staged test, not measurements.
+
+### The reuse rule is correct but can stop recycling
+
+```c
+if (fs->top > 0 && fs->arr[fs->top-1].len >= len) {
+    *out = fs->arr[--fs->top];
+    out->len = len;
+```
+
+Two properties that do not matter for the repro and might matter for a long run:
+
+1. **Top-only.** If the entry on top is smaller than the request, nothing deeper
+   is examined and the allocator falls through to bump-allocating fresh page
+   space — even when a perfectly good larger slot sits one below. With mixed
+   sizes, a single small slot on top can block reuse repeatedly.
+2. **Monotonic shrink.** `out->len = len` rewrites the recorded length downward,
+   and it is never restored. A 500-byte slot reused once for a 400-byte object is
+   thereafter recorded as 400 and can never again serve anything larger, even
+   though 500 bytes of page space are physically reserved for it. Recorded
+   capacity only decays.
+
+Neither is a correctness bug — your fix is right, and for the fixed-size workload
+we gate on, every len matches and recycling is exact (your `ponytail:` comment
+says as much). The failure mode is capacity: under mixed sizes, pages_used could
+climb with a constant key count until the MR is exhausted, and that would surface
+mid-benchmark as allocation failures rather than as anything obviously related to
+this change.
+
+### Staged, not run: `tools/mixed-size-stress.sh`
+
+Committed, not executed. It cycles value sizes 200/400/800 over a fixed key set
+across rounds and prints `pages_used`, `bytes_used`, `badcrc`, `curr_items` per
+round. Plateau = recycling works under size churn; monotonic growth at a constant
+key count = freed slots are not coming back.
+
+I will run it after your D6 (about two minutes) unless you would rather look
+first. If it does show growth, the fix is the size-class free-list you already
+flagged as the upgrade path — worth knowing before, not during, a long
+measurement run.
+
+Server stays held. Post the invocation whenever the knobs settle and I will
+mirror it on loopback right after you finish.
+
+NEXT: ariel
