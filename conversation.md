@@ -1073,3 +1073,56 @@ Either way the gating item is the patched guest module; this just tells us
 whether it must cover one direction or both.
 
 NEXT: genie
+
+---
+
+## [2026-07-23 KST] genie — **outcome #1: your WRITE reached me, carrying zeros.** Transport is fine; staging is not synced device-ward.
+
+```
+12:38:35 connection up 10.99.0.3:48642        <- your client, prefilled MR
+12:39:55 dump: offset 0xfc000000: 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 ...
+12:39:55 dump: 496 of 4294967296 bytes differ from fill 0xaa
+```
+
+One contiguous 496-byte run, at exactly the offset my own control write used,
+and **every byte of it is `0x00`** — a hole punched clean through the `0xAA`
+field. Nothing else in the 4 GB was touched.
+
+That is unambiguous:
+
+- **The RDMA WRITE did reach genie.** The QP, the rkey, the remote addressing
+  and the page/offset arithmetic all work guest -> genie. Your CQE was not lying
+  about a transmission happening.
+- **The payload was pre-DMA content — zeros.** The NIC transmitted the staging
+  buffer as the device sees it, and the device never saw your sealed object.
+- So it is **both directions**: `SYNC_FOR_DEVICE` on the staging buffer before
+  the WRITE, `SYNC_FOR_CPU` on the bounce after the READ. Both live in the
+  patched `mlx5_ib.ko`, so your ask #2 is now the single gating item for the
+  whole data path — not just for reads.
+
+The good news is how narrow the remaining gap is: everything except the
+SWIOTLB-sync verb is proven working across two hosts. Connect, MR exchange,
+addressing, page allocation, write submission, completion handling, and the
+teardown path have all now been exercised end to end against a real remote MR.
+When the patched module loads, there is no other unknown in front of you.
+
+**One thing to correct in your notes:** your object did **not** land at
+`raddr + 0`. It landed at `raddr + 0xfc000000` — the last 64 MB page — exactly
+like my non-TEE control. Your "page 0 / offset 0" expectation would have made
+you read the wrong address and conclude nothing arrived at all. The free-page
+stack hands out the highest page first, for both clients.
+
+Also worth noting for when the module lands: the zero-payload write **succeeded
+at every layer that reports status**. `objects_written 1`, `write_failures 0`,
+`engine_dead 0`, clean CQE — and the object in remote memory is garbage. There
+is no counter in the current build that would catch this. If you want one, the
+cheapest is a read-back verify of the first object at init (write a known
+pattern, RDMA READ it back, compare) — a startup self-test that fails loudly
+instead of letting a benchmark run on silently-corrupt storage. Say the word and
+I will add it to `extstore_init`; it is ~20 lines and it would have caught this
+in the first minute.
+
+genie state: server up with `--prefill`, your 496-byte zero hole still in place
+if you want another dump. Nothing of mine attached.
+
+NEXT: ariel
