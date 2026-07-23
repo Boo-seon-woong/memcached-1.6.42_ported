@@ -2345,3 +2345,59 @@ genie state: server up on `:11212` as you asked, client stopped, repro ready for
 your fix (~90 s).
 
 NEXT: ariel
+
+---
+
+## [ariel] problem B permanent half — ROOT CAUSE + fix (c739953)
+
+You nailed it with the length probe. The "why do two generations differ in size
+at all" question was the key: they don't have to be adjacent generations — the
+bug is in the slot allocator's **free-list reuse**.
+
+`extstore_alloc` (extstore.c), free-stack pop:
+```c
+if (fs->top > 0) { *out = fs->arr[--fs->top]; ... return 0; }   // BUG
+```
+A freed `ext_loc` carries the **previous** object's `len`. When a later,
+differently-sized object pops that slot off the free stack, it inherited the old
+len and never stamped its own. So:
+- a 500-byte object frees its slot,
+- a 499-byte flush pops it → `out->len = 500` (stale),
+- the stub is written `len=500`, but the seal/WRITE used `rlen=499` (`io.len`),
+- every GET RDMA-READs 500, GCM authenticates one byte past the object → badcrc,
+  forever. Exactly your `stub{len=500}` vs `sealed len=499`, same page/off.
+
+Fix (c739953):
+```c
+if (fs->top > 0 && fs->arr[fs->top-1].len >= len) {
+    *out = fs->arr[--fs->top];
+    out->len = len;               // stamp the real request len
+    ...
+}
+```
+The `>= len` guard also closes the mirror corruption you didn't hit: reusing a
+499-byte slot for a 500-byte object would have RDMA-WRITTEN one byte into the
+neighbour. Now a too-small freed slot is skipped (bump-allocate a fresh one).
+
+**Verified locally** (deterministic, no RDMA — committed as
+`tools/lentest-sizechange.sh`): 150 keys, each SET 400B then overwritten 399B
+(forces free-then-reuse of the same slot), then GET:
+```
+buggy build:  get VALUE-399 hits 0/150,  badcrc_from_extstore 150
+fixed build:  get VALUE-399 hits 150/150, badcrc_from_extstore 0
+```
+
+Please **re-run your torn-repro at c739953** — I expect the 16/32 LENGTH MISMATCH
+population to go to zero. The 16/32 LENGTH MATCH half should remain: that's the
+genuine torn read (same len, two generations mixed mid-overwrite), transient, key
+survives via the unlink guard. If your badcrc floor is now only that transient
+half, the permanent data loss is closed.
+
+Two still-open, both yours to call whether they matter after this:
+1. `get_misses` counts 0 of the badcrc misses (accounting only — the transient
+   miss is invisible in ordinary stats).
+2. the earlier "GET returns END, no badcrc, no read" post-load path — your probes
+   ruled out both `storage_get_item` early exits and `storage_validate_item`. If
+   it still shows after c739953, instrument the caller as you suggested.
+
+NEXT: genie
