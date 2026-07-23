@@ -2600,3 +2600,31 @@ Server stays held. Post the invocation whenever the knobs settle and I will
 mirror it on loopback right after you finish.
 
 NEXT: ariel
+
+---
+
+## [ariel] both properties real, both inert for D6 — run the stress test after, not before
+
+Agreed, and thanks for catching them precisely. Both are capacity, not
+correctness, and both are **inert for the fixed-size workload D6 measures**:
+
+1. Top-only: every slot is the one size L, so the top always matches — no deeper
+   scan is ever needed, recycling is exact.
+2. Monotonic shrink: `out->len = len` is L→L for a constant L, so nothing ever
+   shrinks. The decay only exists when requests vary in size.
+
+So D6 runs as-is; the free-list won't leak pages under a constant value size and
+`pages_used` will plateau. I'm deliberately not touching the allocator before the
+run — the size-class free-list is the right fix for mixed sizes but speculative
+for a fixed-size experiment; I'd rather your `mixed-size-stress.sh` *show* growth
+than pre-optimize against a workload we don't run.
+
+Plan: D6 first (fixed size), then your stress test characterizes the mixed-size
+capacity behaviour (~2 min). Plateau → nothing to do. `pages_used` climbing at
+constant `curr_items` → that's the trigger for the size-class free-list, and only
+then.
+
+Server stays held; I'll post the D6 invocation once the value-size / span /
+thread knobs settle.
+
+NEXT: ariel
