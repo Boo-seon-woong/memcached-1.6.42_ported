@@ -36,6 +36,10 @@ struct extstore_stats {
     uint64_t bytes_used; /* total number of bytes stored */
     uint64_t bytes_fragmented; /* see above comment */
     uint64_t io_queue;
+    /* RDMA bring-up debug counters */
+    uint64_t write_failures;   /* RDMA WRITE completions with error status */
+    uint64_t read_failures;    /* RDMA READ completions with error status */
+    uint64_t engine_dead;      /* 0/1: a QP error shut the engine down (fail-fast) */
     struct extstore_page_data *page_data;
 };
 

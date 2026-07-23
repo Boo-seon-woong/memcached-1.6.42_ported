@@ -20,6 +20,7 @@
 
 static bool g_crypto_on = false;
 static unsigned int g_read_retries = 3;   // torn-read retry cap (EXT_READ_RETRIES)
+static _Atomic uint64_t g_read_retry_ct = 0;  // torn-read retries observed (debug)
 
 // Write-path context carried across the async RDMA WRITE completion (P-2).
 typedef struct {
@@ -147,6 +148,12 @@ void storage_stats(ADD_STAT add_stats, void *c) {
         APPEND_STAT("extstore_bytes_fragmented", "%llu", (unsigned long long)st.bytes_fragmented);
         APPEND_STAT("extstore_limit_maxbytes", "%llu", (unsigned long long)(st.page_count * st.page_size));
         APPEND_STAT("extstore_io_queue", "%llu", (unsigned long long)(st.io_queue));
+        // RDMA bring-up debug counters (SPEC §8). Nonzero = look here first.
+        APPEND_STAT("extstore_engine_dead", "%llu", (unsigned long long)st.engine_dead);
+        APPEND_STAT("extstore_write_failures", "%llu", (unsigned long long)st.write_failures);
+        APPEND_STAT("extstore_read_failures", "%llu", (unsigned long long)st.read_failures);
+        APPEND_STAT("extstore_read_retries", "%llu",
+                (unsigned long long)atomic_load(&g_read_retry_ct));
     }
 
 }
@@ -172,6 +179,7 @@ static void _storage_get_item_cb(void *e, obj_io *io, int ret) {
         if (ext_crypto_open(read_it, (uint8_t *)io->buf, io->len, &aad) < 0) {
             // tag fail = torn read (concurrent in-place overwrite) or tamper.
             if (io->retries++ < g_read_retries) {
+                atomic_fetch_add(&g_read_retry_ct, 1);
                 io->next = NULL;
                 extstore_submit(e, io);   // engine frees this bounce slot, re-posts
                 return;

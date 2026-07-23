@@ -95,8 +95,8 @@ memcached_debug_CFLAGS = @PROFILER_FLAGS@
 
 # extstore RDMA port: RDMA verbs + OpenSSL for remote-memory backend.
 # (generated Makefile also patched directly; this line is the durable source.)
-memcached_LDADD = -libverbs -lcrypto
-memcached_debug_LDADD += -libverbs -lcrypto
+memcached_LDADD = -lrdmacm -libverbs -lcrypto
+memcached_debug_LDADD += -lrdmacm -libverbs -lcrypto
 memcached_LDFLAGS =
 memcached_debug_LDFLAGS =
 memcached_DEPENDENCIES =

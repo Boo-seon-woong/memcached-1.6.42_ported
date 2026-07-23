@@ -19,10 +19,9 @@
 #include <sys/socket.h>
 #include <sys/mman.h>
 #include <netinet/in.h>
-#include <netinet/tcp.h>
 #include <arpa/inet.h>
-#include <netdb.h>
 #include <infiniband/verbs.h>
+#include <rdma/rdma_cma.h>
 #include "extstore.h"
 
 /* Custom advice added by the SEV SWIOTLB-sync kernel patch (rdma-porting-refs/).
@@ -31,10 +30,10 @@
 #define IBV_ADVISE_MR_ADVICE_SYNC_FOR_CPU 3
 #endif
 
-#define XRD_MAGIC "XRD1"
-#define IB_PORT 1
-#define GID_IDX 0
-#define PSN 0
+#define CM_TIMEOUT_MS 2000
+
+/* Remote MR info handed to each client connection in the accept private_data. */
+struct xrd_mr_info { uint64_t raddr; uint32_t rkey; uint64_t size; } __attribute__((packed));
 
 #define STAT_L(e)   pthread_mutex_lock(&e->stats_mutex)
 #define STAT_UL(e)  pthread_mutex_unlock(&e->stats_mutex)
@@ -59,6 +58,7 @@ typedef struct {
     pthread_mutex_t mutex;
     pthread_cond_t cond;
     obj_io *queue, *queue_tail;
+    struct rdma_cm_id *cm_id;     /* owns the QP after rdma_connect */
     struct ibv_qp *qp;
     struct ibv_cq *cq;
     char *bounce_base;            /* read_slots * slot_size */
@@ -98,15 +98,6 @@ struct store_engine {
     pthread_mutex_t stats_mutex;
 };
 
-/* ---- small helpers ---- */
-
-static int read_full(int fd, void *b, size_t n) {
-    uint8_t *p = b; while (n) { ssize_t r = read(fd, p, n); if (r <= 0) return -1; p += r; n -= r; } return 0;
-}
-static int write_full(int fd, const void *b, size_t n) {
-    const uint8_t *p = b; while (n) { ssize_t r = write(fd, p, n); if (r <= 0) return -1; p += r; n -= r; } return 0;
-}
-
 const char *extstore_err(enum extstore_res res) {
     const char *rv = "unknown error";
     switch (res) {
@@ -118,67 +109,69 @@ const char *extstore_err(enum extstore_res res) {
     return rv;
 }
 
-/* ---- RDMA connection bootstrap (client side of SPEC §2.7) ---- */
-
-static int qp_to_init(struct ibv_qp *qp) {
-    struct ibv_qp_attr a = { .qp_state = IBV_QPS_INIT, .pkey_index = 0,
-        .port_num = IB_PORT,
-        .qp_access_flags = IBV_ACCESS_REMOTE_READ | IBV_ACCESS_REMOTE_WRITE };
-    return ibv_modify_qp(qp, &a, IBV_QP_STATE | IBV_QP_PKEY_INDEX |
-            IBV_QP_PORT | IBV_QP_ACCESS_FLAGS);
+/* ---- RDMA connection via rdma_cm (IP-based; CM resolves GID/route/MTU) ----
+ * One RC connection per IO thread. Synchronous CM (one-shot at init). The genie
+ * server hands back the remote MR (addr,rkey,size) in the accept private_data.
+ */
+static int cm_wait(struct rdma_event_channel *ch, enum rdma_cm_event_type want,
+                   struct rdma_cm_event **out) {
+    struct rdma_cm_event *ev;
+    if (rdma_get_cm_event(ch, &ev)) return -1;
+    if (ev->event != want) { rdma_ack_cm_event(ev); return -1; }
+    if (out) *out = ev; else rdma_ack_cm_event(ev);
+    return 0;
 }
 
-static int qp_to_rts(struct ibv_qp *qp, uint32_t dqpn, uint32_t dpsn,
-                     const union ibv_gid *dgid) {
-    struct ibv_qp_attr r = { .qp_state = IBV_QPS_RTR, .path_mtu = IBV_MTU_1024,
-        .dest_qp_num = dqpn, .rq_psn = dpsn, .max_dest_rd_atomic = 16,
-        .min_rnr_timer = 12,
-        .ah_attr = { .is_global = 1, .port_num = IB_PORT,
-            .grh = { .hop_limit = 1, .sgid_index = GID_IDX } } };
-    memcpy(&r.ah_attr.grh.dgid, dgid, 16);
-    if (ibv_modify_qp(qp, &r, IBV_QP_STATE | IBV_QP_AV | IBV_QP_PATH_MTU |
-            IBV_QP_DEST_QPN | IBV_QP_RQ_PSN | IBV_QP_MAX_DEST_RD_ATOMIC |
-            IBV_QP_MIN_RNR_TIMER)) return -1;
-    struct ibv_qp_attr t = { .qp_state = IBV_QPS_RTS, .sq_psn = PSN,
-        .timeout = 14, .retry_cnt = 7, .rnr_retry = 7, .max_rd_atomic = 16 };
-    return ibv_modify_qp(qp, &t, IBV_QP_STATE | IBV_QP_SQ_PSN | IBV_QP_TIMEOUT |
-            IBV_QP_RETRY_CNT | IBV_QP_RNR_RETRY | IBV_QP_MAX_QP_RD_ATOMIC);
+/* Connect one QP for thread `ti`. On the first connection, learns the remote MR.
+ * Uses/sets e->pd (shared across all QPs, from the resolved device context). */
+static int cm_connect_one(store_engine *e, struct sockaddr *dst, unsigned int ti,
+                          bool first, uint64_t *size_out) {
+    store_iothr *t = &e->io_threads[ti];
+    struct rdma_event_channel *ch = rdma_create_event_channel();
+    if (!ch) return -1;
+    if (rdma_create_id(ch, &t->cm_id, NULL, RDMA_PS_TCP)) return -1;
+    if (rdma_resolve_addr(t->cm_id, NULL, dst, CM_TIMEOUT_MS) ||
+        cm_wait(ch, RDMA_CM_EVENT_ADDR_RESOLVED, NULL)) return -1;
+    if (rdma_resolve_route(t->cm_id, CM_TIMEOUT_MS) ||
+        cm_wait(ch, RDMA_CM_EVENT_ROUTE_RESOLVED, NULL)) return -1;
+
+    if (first) {
+        e->pd = ibv_alloc_pd(t->cm_id->verbs);
+        if (!e->pd) return -1;
+    }
+    t->cq = ibv_create_cq(t->cm_id->verbs, e->io_depth * 2, NULL, NULL, 0);
+    if (!t->cq) return -1;
+    struct ibv_qp_init_attr ia = { .send_cq = t->cq, .recv_cq = t->cq,
+        .qp_type = IBV_QPT_RC, .cap = { .max_send_wr = e->io_depth + 1,
+            .max_recv_wr = 1, .max_send_sge = 1, .max_recv_sge = 1 } };
+    if (rdma_create_qp(t->cm_id, e->pd, &ia)) return -1;
+    t->qp = t->cm_id->qp;
+
+    struct rdma_conn_param cp = { .responder_resources = 16, .initiator_depth = 16,
+        .retry_count = 7, .rnr_retry_count = 7 };
+    struct rdma_cm_event *ev;
+    if (rdma_connect(t->cm_id, &cp) ||
+        cm_wait(ch, RDMA_CM_EVENT_ESTABLISHED, &ev)) return -1;
+    if (first) {
+        if (ev->param.conn.private_data_len < sizeof(struct xrd_mr_info)) {
+            rdma_ack_cm_event(ev); return -1;
+        }
+        struct xrd_mr_info mi;
+        memcpy(&mi, ev->param.conn.private_data, sizeof(mi));
+        e->raddr = mi.raddr; e->rkey = mi.rkey; *size_out = mi.size;
+    }
+    rdma_ack_cm_event(ev);
+    /* keep the event channel; not polled after connect */
+    return 0;
 }
 
 static int genie_connect(store_engine *e, const char *host, int port,
                          uint64_t *size_out) {
-    struct addrinfo hints = { .ai_family = AF_INET, .ai_socktype = SOCK_STREAM };
-    struct addrinfo *ai; char pbuf[16]; snprintf(pbuf, sizeof(pbuf), "%d", port);
-    if (getaddrinfo(host, pbuf, &hints, &ai)) return -1;
-    int s = socket(ai->ai_family, ai->ai_socktype, 0);
-    if (s < 0 || connect(s, ai->ai_addr, ai->ai_addrlen)) { freeaddrinfo(ai); return -1; }
-    freeaddrinfo(ai);
-
-    union ibv_gid gid;
-    if (ibv_query_gid(e->ctx, IB_PORT, GID_IDX, &gid)) { close(s); return -1; }
-    uint32_t nqp = e->io_threadcount;
-
-    /* client -> genie: [magic][nqp][nqp*{qpn,psn}][gid] */
-    if (write_full(s, XRD_MAGIC, 4) || write_full(s, &nqp, 4)) { close(s); return -1; }
-    for (uint32_t i = 0; i < nqp; i++) {
-        uint32_t qpn = e->io_threads[i].qp->qp_num, psn = PSN;
-        if (write_full(s, &qpn, 4) || write_full(s, &psn, 4)) { close(s); return -1; }
-    }
-    if (write_full(s, &gid, 16)) { close(s); return -1; }
-
-    /* genie -> client: [magic][raddr][rkey][size][nqp*{qpn,psn}][gid] */
-    char magic[4];
-    if (read_full(s, magic, 4) || memcmp(magic, XRD_MAGIC, 4)) { close(s); return -1; }
-    if (read_full(s, &e->raddr, 8) || read_full(s, &e->rkey, 4) ||
-        read_full(s, size_out, 8)) { close(s); return -1; }
-    struct { uint32_t qpn, psn; } srv[64];
-    if (read_full(s, srv, nqp * 8)) { close(s); return -1; }
-    union ibv_gid sgid;
-    if (read_full(s, &sgid, 16)) { close(s); return -1; }
-    close(s);
-
-    for (uint32_t i = 0; i < nqp; i++)
-        if (qp_to_rts(e->io_threads[i].qp, srv[i].qpn, srv[i].psn, &sgid)) return -1;
+    struct sockaddr_in sa = { .sin_family = AF_INET, .sin_port = htons(port) };
+    if (inet_pton(AF_INET, host, &sa.sin_addr) != 1) return -1;
+    for (unsigned int i = 0; i < e->io_threadcount; i++)
+        if (cm_connect_one(e, (struct sockaddr *)&sa, i, i == 0, size_out))
+            return -1;
     return 0;
 }
 
@@ -248,8 +241,13 @@ static void *extstore_io_thread(void *arg) {
         if (n) {
             if (ibv_post_send(t->qp, &wrs[0], &bad)) {
                 atomic_store(&e->dead, 1);
+                STAT_L(e); e->stats.engine_dead = 1; STAT_UL(e);
                 for (int i = 0; i < n; i++) {
                     obj_io *io = (obj_io *)(uintptr_t)wrs[i].wr_id;
+                    STAT_L(e);
+                    if (io->mode == OBJ_IO_READ) e->stats.read_failures++;
+                    else e->stats.write_failures++;
+                    STAT_UL(e);
                     if (io->mode == OBJ_IO_READ)
                         t->bounce_free |= 1ULL << ((io->buf - t->bounce_base) / e->slot_size);
                     io->cb(e, io, -1);
@@ -280,7 +278,14 @@ static void *extstore_io_thread(void *arg) {
             io->t_cqe = __builtin_ia32_rdtsc();
 #endif
             int ok = (wc[i].status == IBV_WC_SUCCESS);
-            if (!ok) atomic_store(&e->dead, 1);
+            if (!ok) {
+                atomic_store(&e->dead, 1);
+                STAT_L(e);
+                e->stats.engine_dead = 1;
+                if (io->mode == OBJ_IO_READ) e->stats.read_failures++;
+                else e->stats.write_failures++;
+                STAT_UL(e);
+            }
             io->cb(e, io, ok ? (int)io->len : -1);
             if (io->mode == OBJ_IO_READ) {
                 int s = (io->buf - t->bounce_base) / e->slot_size;
@@ -333,19 +338,9 @@ void *extstore_init(struct extstore_conf_file *fh, struct extstore_conf *cf,
         goto pages_setup;
     }
 
-    int ndev; struct ibv_device **devs = ibv_get_device_list(&ndev);
-    if (!devs || ndev == 0) { *res = EXTSTORE_INIT_OPEN_FAIL; goto fail; }
-    e->ctx = ibv_open_device(devs[0]);
-    ibv_free_device_list(devs);
-    if (!e->ctx) { *res = EXTSTORE_INIT_OPEN_FAIL; goto fail; }
-    e->pd = ibv_alloc_pd(e->ctx);
-    if (!e->pd) { *res = EXTSTORE_INIT_OPEN_FAIL; goto fail; }
-
-    /* bounce pool (read dest) */
+    /* allocate the read/write buffers (registration happens after we have a pd) */
     size_t bsz = (size_t)e->io_threadcount * e->read_slots * e->slot_size;
     char *bbase; if (posix_memalign((void **)&bbase, 4096, bsz)) { *res = EXTSTORE_INIT_OOM; goto fail; }
-    e->bounce_mr = ibv_reg_mr(e->pd, bbase, bsz, IBV_ACCESS_LOCAL_WRITE);
-    if (!e->bounce_mr) { *res = EXTSTORE_INIT_OPEN_FAIL; goto fail; }
 
     /* staging pool (write source). ponytail: plain mmap here; on the SEV guest
      * this must be snp_shared (WC/shared) memory — see rdma-porting-refs. */
@@ -354,14 +349,8 @@ void *extstore_init(struct extstore_conf_file *fh, struct extstore_conf *cf,
     e->staging_base = mmap(NULL, ssz, PROT_READ | PROT_WRITE,
                            MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
     if (e->staging_base == MAP_FAILED) { *res = EXTSTORE_INIT_OOM; goto fail; }
-    e->staging_mr = ibv_reg_mr(e->pd, e->staging_base, ssz, IBV_ACCESS_LOCAL_WRITE);
-    if (!e->staging_mr) { *res = EXTSTORE_INIT_OPEN_FAIL; goto fail; }
-    e->staging_free = malloc(sizeof(char *) * e->staging_count);
-    for (unsigned int i = 0; i < e->staging_count; i++)
-        e->staging_free[i] = e->staging_base + (size_t)i * e->slot_size;
-    e->staging_top = e->staging_count;
 
-    /* IO threads: QP + CQ + bounce window each */
+    /* per-thread state, then connect all QPs via rdma_cm (sets e->pd, e->raddr) */
     e->io_threads = calloc(e->io_threadcount, sizeof(store_iothr));
     for (unsigned int i = 0; i < e->io_threadcount; i++) {
         store_iothr *t = &e->io_threads[i];
@@ -370,18 +359,18 @@ void *extstore_init(struct extstore_conf_file *fh, struct extstore_conf *cf,
         pthread_cond_init(&t->cond, NULL);
         t->bounce_base = bbase + (size_t)i * e->read_slots * e->slot_size;
         t->bounce_free = (e->read_slots >= 64) ? ~0ULL : ((1ULL << e->read_slots) - 1);
-        t->cq = ibv_create_cq(e->ctx, e->io_depth * 2, NULL, NULL, 0);
-        if (!t->cq) { *res = EXTSTORE_INIT_OPEN_FAIL; goto fail; }
-        struct ibv_qp_init_attr ia = { .send_cq = t->cq, .recv_cq = t->cq,
-            .qp_type = IBV_QPT_RC, .cap = { .max_send_wr = e->io_depth + 1,
-                .max_recv_wr = 1, .max_send_sge = 1, .max_recv_sge = 1 } };
-        t->qp = ibv_create_qp(e->pd, &ia);
-        if (!t->qp || qp_to_init(t->qp)) { *res = EXTSTORE_INIT_OPEN_FAIL; goto fail; }
     }
-
-    /* connect genie, learn remote MR, RTS all QPs */
     uint64_t rsize = 0;
     if (genie_connect(e, fh->file, fh->cport, &rsize)) { *res = EXTSTORE_INIT_OPEN_FAIL; goto fail; }
+
+    /* register MRs on the connection's pd */
+    e->bounce_mr = ibv_reg_mr(e->pd, bbase, bsz, IBV_ACCESS_LOCAL_WRITE);
+    e->staging_mr = ibv_reg_mr(e->pd, e->staging_base, ssz, IBV_ACCESS_LOCAL_WRITE);
+    if (!e->bounce_mr || !e->staging_mr) { *res = EXTSTORE_INIT_OPEN_FAIL; goto fail; }
+    e->staging_free = malloc(sizeof(char *) * e->staging_count);
+    for (unsigned int i = 0; i < e->staging_count; i++)
+        e->staging_free[i] = e->staging_base + (size_t)i * e->slot_size;
+    e->staging_top = e->staging_count;
 
     /* pages carve the remote MR */
     e->page_count = rsize / e->page_size;
