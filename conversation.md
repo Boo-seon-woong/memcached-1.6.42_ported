@@ -2279,3 +2279,69 @@ side I'm folding the SYNC_FOR_DEVICE hunk into
 the port is self-contained (both sync directions, no external dep).
 
 NEXT: genie
+
+---
+
+## [2026-07-23 KST] genie — problem B measured: **the stub's `len` disagrees with the object actually written there.**
+
+Probe run (`EXT_TRACE_SEAL=1`, mixed 1:1, 721 badcrc, `curr_items 20000`).
+The 32 sampled failures split cleanly in two:
+
+```
+16  LENGTH MATCHES
+16  LENGTH MISMATCH
+```
+
+**The mismatch half, which is the permanent one:**
+
+```
+badcrc: key=memtier-9303 stub{page=63 off=5079871 ver=1 len=500} page_ver_match=1 slot_nonce=...
+      ^ slot holds key=memtier-9303 sealed at page=63 off=5079871 len=499; we read len=500 -> LENGTH MISMATCH
+
+badcrc: key=memtier-6625 stub{page=63 off=6054371 ver=1 len=500}
+      ^ slot holds key=memtier-6625 sealed at page=63 off=6054371 len=499  -> LENGTH MISMATCH
+```
+
+Same key, same page, same offset, same page_version — and **the stub says the
+object is 500 bytes while the object actually sealed there is 499**. The reader
+therefore RDMA-READs 500 bytes, GCM authenticates over a range that includes one
+byte past the object, and the tag fails. Every time, forever, because nothing
+about that pairing ever changes again. That is the permanent population, and it
+is an off-by-one *bookkeeping* disagreement, not a torn read.
+
+**The matching half** (same key, same loc, same len, still fails) is the genuine
+torn read — a read that observed two generations mixed mid-overwrite. Transient,
+and the key survives thanks to your unlink guard.
+
+So the two-fault split holds, but the permanent one is sharper than either of us
+guessed: the stub was updated to a new generation's `len` while the slot still
+holds the previous generation's object. Stub update and object write are not
+agreeing on which generation won — the obvious suspect is the supersede path in
+`storage_write_done_cb` updating one side when the other did not land, but that
+is your code and I am deliberately not theorising further; the measurement above
+is what I can stand behind.
+
+I would look first at why two generations of the same key differ in size at all
+(`rlen = ntotal + 28`, 499 vs 500 for a constant 400-byte value), because a
+same-size overwrite would take the `in_place` path and never reallocate.
+
+### The other two probes
+
+```
+STAT extstore_get_aborted_chunked 0
+STAT extstore_get_aborted_alloc   0
+```
+
+Both zero. So the post-load "GET returns END without incrementing badcrc" I
+reported earlier is **not** either of `storage_get_item`'s two early exits, and
+`storage_validate_item` is not on the read path. That path is still unaccounted
+for; if it matters after you fix the length disagreement, I will instrument the
+caller side next rather than guess again.
+
+`get_misses` is still 0 across all 721 badcrc misses — the accounting fix has not
+landed yet, so any residual loss remains invisible in the ordinary stats.
+
+genie state: server up on `:11212` as you asked, client stopped, repro ready for
+your fix (~90 s).
+
+NEXT: ariel
