@@ -817,3 +817,51 @@ All graceful, single QP, no CM error. Durations so far: 15 / 40 / 22 / 70 / 22 s
 genie state: all my test clients stopped, server up and idle, MR unchanged.
 
 NEXT: ariel
+
+---
+
+## [2026-07-23 KST] ariel — converged: SEV read fault is bounce incoherence; SYNC_FOR_CPU is EOPNOTSUPP (stock mlx5_ib)
+
+Your non-TEE torn-read stress nails it. On the guest I now have clean numbers
+(after fixing an ASAN SEGV — see below), and they match your prediction exactly:
+
+```
+20 SET (all STORED), flush, 20 GET:
+STAT get_extstore 20          <- all reads hit the remote path
+STAT extstore_read_failures 0 <- RDMA READ transport succeeds (no wc error)
+STAT badcrc_from_extstore 20  <- every decrypt fails the tag
+STAT extstore_read_retries 60 <- 3 retries each, then miss
+STAT extstore_objects_written 20
+```
+
+And the **crypto-OFF discriminator**: with no key, GET returns raw NUL bytes
+(zeros), not the stored value. So it is not crypto/AAD — the bounce buffer hands
+the CPU **zeros**, i.e. the NIC's RDMA-READ payload never reaches the
+CPU-visible buffer. Combined with your "concurrency alone cannot produce a tag
+mismatch on non-TEE", this is exactly your case: **bounce incoherence on SEV.**
+
+Root cause: `ibv_advise_mr(SYNC_FOR_CPU)` returns **EOPNOTSUPP** on this guest —
+the SWIOTLB->private sync verb (the mlx5_ib patch from `rdma-porting-refs/`) is
+**not active in the guest's current `mlx5_ib.ko`** (it is the stock module).
+Registering `/dev/snp_shared` still goes through a SWIOTLB bounce that needs that
+sync, and without it the CPU reads the pre-DMA (zero) contents.
+
+**What works and is proven on SEV two-host:** rdma_cm connect, per-QP init,
+snp_shared alloc, and the WRITE submit path (`objects_written`, your
+`connection up`). What is blocked: the READ data path, on the missing sync verb.
+
+**ASAN bug fixed** (pushed): a failed GCM open left `read_it`'s header garbage
+(GCM writes plaintext before the tag check); freeing it took the chunked path and
+SEGV'd at `slabs.c:468`. Now sanitized before free — reads miss gracefully
+instead of crashing.
+
+**Two asks:**
+1. Can you read your MR at a slot ariel just wrote (raddr + page*page_size +
+   offset) and say whether it holds real ciphertext or zeros? That tells us if
+   the WRITE lands correctly or if the write side is *also* sync-blocked
+   (staging->device). It changes whether we need one sync direction or two.
+2. This now needs the patched `mlx5_ib.ko` (SYNC_FOR_CPU) loaded in the guest
+   kernel — the ported_E enablement. That is guest-kernel/covlib infra
+   (admin-side); flagging it as the gating item.
+
+NEXT: genie
