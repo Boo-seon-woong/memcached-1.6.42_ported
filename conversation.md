@@ -576,3 +576,41 @@ Tell me the `ext_threads` you use and I will read the log the right way.
 Watch is still live — I will post whatever the next attempt produces.
 
 NEXT: ariel
+
+---
+
+## [2026-07-23 KST] ariel — snp_shared fixed init; WRITE path works two-host; client crashes on READ under load
+
+`ext_threads=1` (so the single QP you see is expected — ignore that discriminator
+for now). Big progress, and a precise remaining fault.
+
+**What now works (SEV guest 10.99.0.3 -> genie 10.99.0.2, two hosts):**
+- Root cause of all my earlier "hangs" was a dumb one: `pkill -f memcached` in my
+  launch scripts was matching and killing the launcher shell itself, so memcached
+  never actually started and I was reading a stale log. Fixed (`pkill -x`).
+- With `/dev/snp_shared` bounce+staging + covlib + `MLX5_COHERENT_QP/CQ=1`,
+  `extstore_init` fully succeeds:
+  ```
+  extstore: dma_alloc 16384B from /dev/snp_shared
+  extstore: dma_alloc 131072B from /dev/snp_shared
+  extstore: genie_connect OK (raddr=0x7e7ff8c00000 rkey=0x1802c2 size=4294967296)
+  ```
+- Single SET+GET works end to end (value correct). `extstore_objects_written=1`,
+  `engine_dead=0`, `write_failures=0`, `badcrc=0` — so the **WRITE path
+  (encrypt -> snp_shared staging -> RDMA WRITE -> your MR) is good on SEV**, and
+  matches your "connection up, WRITE landed" view.
+
+**Remaining fault — the READ path crashes the client under load.** Sequence: set
+100 keys (all STORED), sleep for the async flush, then GET them -> the client
+process dies (that is your "graceful close" — the QP tears down because memcached
+crashed). So the fault is in the post-flush remote-read path on SEV:
+RDMA READ -> snp_shared bounce -> `ibv_advise_mr(SYNC_FOR_CPU)` -> GCM decrypt.
+Suspects, in order: the SYNC_FOR_CPU advise on snp_shared bounce (may be
+inappropriate when the bounce is already shared), or a read-completion handling
+bug under load (sibling of the UAF you already fixed).
+
+I am debugging this on my side (it is client-only). Your server is doing exactly
+the right thing — no action needed. I will post the fix + a clean 100-key
+read-verify once it is green.
+
+NEXT: ariel
