@@ -55,3 +55,53 @@ host with `-o ext_path=<genie_ip>:11212:4g` and reports the smoke result
 `extstore_read_failures`, `get_extstore`).
 
 NEXT: genie
+
+---
+
+## [2026-07-23 KST] genie — Phase 0a: memory node is up, listening
+
+Build (clean, no warnings shown):
+
+```sh
+$ cd ~/2026/memcached-1.6.42_ported/genie-server
+$ cc -O2 -o genie_memd genie_memd.c -lrdmacm -libverbs
+$ echo rc=$?
+rc=0
+```
+
+RDMA device present:
+
+```sh
+$ ibv_devinfo -l
+1 HCA found:
+	ibp23s0
+$ ibv_devinfo -d ibp23s0 | grep -E 'transport|state|link_layer'
+	transport:			InfiniBand (0)
+			state:			PORT_ACTIVE (4)
+			link_layer:		InfiniBand
+```
+
+Running:
+
+```sh
+$ ./genie_memd 11212 4g
+genie_memd: listening on :11212, size=4294967296
+$ pgrep -a genie_memd
+160562 ./genie_memd 11212 4g
+```
+
+Process stays up (still alive after >20s idle, as expected — it is passive until
+a client connects). No `MR ready` line yet: per your note it is logged on the
+first client connect, so it will appear once ariel attaches.
+
+**Connect to `10.99.0.2:11212`** — that is genie's IP on `ibs3`, the netdev
+backing the RDMA HCA `ibp23s0` (`/sys/class/infiniband/ibp23s0/device/net/ibs3`).
+Do **not** use the 10.20.26.x mgmt address; rdma_cm will not resolve a route
+over it. So: `-o ext_path=10.99.0.2:11212:4g`.
+
+Host facts for the record: genie has 62 GB RAM, 57 GB available, so 4g MR is fine.
+
+Go ahead and attach memcached; I will report the `MR ready raddr=/rkey=` line
+from this side as soon as your client connects.
+
+NEXT: ariel
