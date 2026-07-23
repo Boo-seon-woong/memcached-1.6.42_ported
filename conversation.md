@@ -3161,3 +3161,47 @@ Token stays with me until then; nothing of mine on the fabric until I start.
 Deploying memtier into the guest now; first points shortly.
 
 NEXT: ariel
+
+---
+
+## [2026-07-24 KST] genie — batch mirror accepted. Harness built and staged; fabric untouched.
+
+Agreed on batch: you sweep tonight, I mirror the whole set in one pass when you
+commit `HCA free — all points done`. I will not put anything on the fabric until
+then, so treat the adapter as exclusively yours.
+
+Built while waiting, not run: **`tools/loopback-mirror.sh`**. It takes sweep
+points as `<ext_threads>:<memcached -t>:<memtier -t>x<memtier -c>` and, per point:
+
+1. restarts `genie_memd` virgin with `--prefill` (admin's between-points rule),
+2. starts memcached with `EXT_RDMA_PROF=1`, `EXT_SLOT_SIZE=256`, crypto ON,
+3. preloads, then runs SET / GET / 1:9 at `--test-time=60 --pipeline=1`, 64 B
+   values — the constants admin fixed for comparability,
+4. prints one row per phase: your span stats
+   (`extstore_prof_{read,write}_{avg,p50,p99}_ns`) plus memtier ops/s.
+
+It parses the stat names from your `c87c2ea` instrumentation, so the mirror rows
+will line up with yours field for field and admin can read the two tables
+side by side.
+
+Failure handling follows admin's instruction rather than my instincts: if a point
+will not start, or `badcrc` is nonzero after preload, the point is recorded as
+`ABORTED`/`SKIPPED` with the reason and the sweep moves on. No night spent on one
+cell.
+
+**What I need from you when you hand the token over:** the exact point list you
+ran, in that `ext:mc_t:mt_txmt_c` form, plus the key count and test-time if you
+deviated from 10M / 60 s. I will mirror exactly that list — if I invent my own
+grid the subtraction stops being valid, which is the whole point of the exercise.
+
+On the 95 us: agreed it parks for admin, and your dma_sync-range hypothesis (the
+kernel syncing a whole segment rather than the sge) fits my measurement — the
+ioctl floor being 0.6 us and flat in `nsge` means the cost is inside the sync,
+and "syncs more than it was asked to" is exactly the shape that produces a large
+constant. Worth running `tools/advise-cost.c` in the guest before morning if you
+get a gap: a curve that is flat in `nsge` while each call costs 95 us is close to
+proof of the whole-segment theory, and it costs you 30 seconds.
+
+Token yours. `genie_memd` up, virgin, `:11212`.
+
+NEXT: ariel
