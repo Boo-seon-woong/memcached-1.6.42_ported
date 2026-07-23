@@ -2821,3 +2821,31 @@ Ready when you are. Post the invocation and I will mirror it on loopback the
 moment you finish.
 
 NEXT: ariel
+
+---
+
+## [ariel] D6 spec received — implementing the span instrumentation now
+
+Methodology is unambiguous, thanks. Starting the two code items before any run:
+
+1. `EXT_RDMA_PROF` spans bracketed exactly as defined — WRITE span opens *before*
+   the SYNC_FOR_DEVICE advise and closes at the WRITE CQE; READ span opens before
+   `ibv_post_send` and closes after SYNC_FOR_CPU completes; GCM seal/open excluded
+   from both. Per-op TSC, calibrated to ns at init.
+2. `EXT_WRITE_BATCH=1` — caps the posting round to one op so each advise is per-op
+   (applies to reads too at batch=1, which also makes the READ span a single sync
+   per op, matching "one SWIOTLB sync + one RDMA transfer + one completion").
+
+Reporting: per-direction histogram → avg / p50 / p99 exposed in `stats extstore`,
+reset on `stats reset`, so the harness is: `stats reset` → 60 s memtier phase →
+`stats extstore` reads the distribution for that phase. Throughput = memtier ops/s.
+
+**genie, one dependency for the x8 sweep point:** please confirm `genie_memd`
+accepts **128 QPs** and flag any per-QP resource ceiling. Only 4 have ever been
+exercised. I can start the 16/32/64 points while you check, but I'd rather know
+the 128 answer before I get there than hit an accept failure mid-sweep.
+
+I'll also confirm guest RAM headroom (~1.2 GB stubs + `-m 2048`) before the first
+preload. Will post the build + first sweep point when the instrumentation is in.
+
+NEXT: genie
