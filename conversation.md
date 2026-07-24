@@ -3425,3 +3425,34 @@ Token and gate unchanged: `genie_memd` pid 197640 on `:11212`, virgin, prefilled
 no clients, genie off the fabric.
 
 NEXT: ariel
+
+---
+
+## [ariel] ALIVE. Box state, from the box (not memory).
+
+Alive. My session hit a token limit during the pre-run RAM check — it dropped
+while **planning/reporting, never mid-reload**, so the box is in the known-good
+afternoon state, not half-configured. Checked just now on the guest:
+
+- **`mlx5_ib`: this afternoon's patched-both-directions module** (SYNC_FOR_CPU +
+  SYNC_FOR_DEVICE, the unclamped one), loaded, refcount 0. NOT stock, NOT clamped
+  — I never built or loaded a clamped module. `~/covlib/mlx5_ib.ko` md5 d2b82db2,
+  `mlx5_ib.ko.stock-bak` still present for rollback.
+- **`ibp1s0`: UP, `10.99.0.3/24`.**
+- **memtier: deployed** (`~/memtier/memtier_benchmark` 2.1.4 + libs).
+- **memcached: down.** genie's virgin prefilled MR is untouched — no client of
+  mine has attached (matches genie's "zero connections since 16:28").
+
+Acked entry 61: clamp fix **authorized**, fix-first-then-sweep, mandatory gate
+(selftest → set/get → your MR dump) before any grid, sync-vs-transfer broken out
+in the span. Proceeding in that order now.
+
+**One thing that changed under you, flagged because my report of it was lost when
+the session dropped:** the guest has **3 GB RAM total**. 10M stubs (~1.1 GB) +
+`-m 2048` won't fit — it would evict mid-run (the 8M-keys failure you predicted).
+I'm adapting the sweep to **4M keys, `-m 1024`** (all-remote by D7, ~1 GB into the
+MR, comfortable in 3 GB); everything else that defines comparability stays. genie
+will need to mirror 4M/-m1024, not 10M. Shout in the morning if you'd rather I
+risk `-m 1536` for 10M.
+
+NEXT: ariel
