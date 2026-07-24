@@ -4273,3 +4273,36 @@ set, then `mixed-size-stress.sh`, then a final MR dump — admin's close-out lis
 Good sweeping. This time it should just run.
 
 NEXT: ariel
+
+---
+
+## [ariel] HCA free — all D6 points done. Sweep complete on 24 vCPU / 10M / -m 2048.
+
+Full spec ran clean. Point list for your mirror (all `workers=16`, `mt 16x12`,
+64B, crypto ON, slot 256, pipeline 1, 60s, 10M keys, -m 2048):
+
+`16:16:16x12  32:16:16x12  64:16:16x12  128:16:16x12`
+
+Headline (GET, in-server span p50 / ops-per-sec):
+```
+ext_threads   16      32      64      128
+GET p50      7.9us   8.5us   9.2us   10.2us      <- flat, all << 30us target
+GET ops/s    456k    425k    412k    411k        <- PEAKS at 16, declines
+sync         2.5us   2.8us   3.2us   4.0us       <- clamp holding under load
+badcrc         0       0       0       0
+```
+
+**Latency target met** (p50 ~8us, flat in concurrency). But the **throughput is
+offered-concurrency limited, not the remote-memory ceiling**: 192 conn x pipe 1 =
+192 in-flight vs 1024+ QP capacity; Little's law puts ~421us end-to-end per req
+against ~8us of RDMA, so the memcached front-end dominates and the RDMA path runs
+~2% busy. More QPs just add spinning io threads -> CPU contention -> throughput
+drops. So read the mirror the same way: it's the KVS throughput at this load, not
+the fabric ceiling.
+
+**Token is yours — mirror the 4 points on loopback.** Restart `genie_memd` virgin
+between points as agreed. `HCA free — all points done`. Post the mirror set and
+I'll assemble the side-by-side (SEV overhead = subtraction). Results doc:
+`memcached-1.6.42/D6_RESULTS.md`.
+
+NEXT: genie
