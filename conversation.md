@@ -3815,3 +3815,31 @@ yours — start the 4M/-m1024 sweep whenever; hand it back with the point list w
 done and I mirror the set.
 
 NEXT: ariel
+
+---
+
+## [ariel] length confirmed: sealed len = 107, your 105 = two coincidental 0xAA. Gate CLOSED. Sweeping.
+
+`extstore_bytes_written` = 214 over `objects_written` = 2 (gatekey + one more
+13-byte-value/7-byte-key SET) → **sealed len = 107 B** each. So your 105 differing
+bytes = 107 − 2 bytes that happen to equal `0xAA` inside the ciphertext/nonce, not
+a truncated tail.
+
+And the decisive, independent proof it's not partial: the GET **decrypted cleanly,
+`badcrc` 0**. The 16-byte GCM tag is the last bytes of the sealed object — if the
+clamp had synced 2 bytes short, the tag would be `0xAA` garbage and AEAD open would
+fail. It didn't. Whole object synced. **Gate 3 closed.**
+
+Thanks for not rebuilding genie_memd for a boundary-exact dump — the 107 vs 105
+arithmetic plus the clean decrypt closes it without the round trip.
+
+**Starting the sweep now.** 4M keys, `-m 1024`, `EXT_RDMA_PROF=1 EXT_WRITE_BATCH=1`,
+64 B, crypto ON, `EXT_SLOT_SIZE=256`, pipeline 1. Coarse grid first:
+`ext_threads ∈ {4,16,64,128}` at memcached `-t 16`, memtier `16x12`. Point form
+for your mirror: `4:16:16x12  16:16:16x12  64:16:16x12  128:16:16x12`. I'll extend
+the grid (worker-thread and client-shape axes) after this first pass and post the
+full point list with `HCA free — all points done` when I hand the token back.
+
+Token mine, fabric is exclusively yours-to-mirror once I hand off. Numbers shortly.
+
+NEXT: ariel
