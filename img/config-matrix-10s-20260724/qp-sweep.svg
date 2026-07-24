@@ -1,0 +1,75 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="960" height="620" viewBox="0 0 960 620">
+<rect width="100%" height="100%" fill="white"/>
+<text x="90" y="57" font-size="13" text-anchor="start" font-weight="bold" fill="#111827">Remote completed GET (M/s)</text>
+<line x1="90" y1="75" x2="90" y2="275" stroke="#374151"/>
+<line x1="90" y1="275" x2="925" y2="275" stroke="#374151"/>
+<line x1="90" y1="275.0" x2="925" y2="275.0" stroke="#e5e7eb"/>
+<text x="82" y="279.0" font-size="11" text-anchor="end" font-weight="normal" fill="#111827">0.0</text>
+<line x1="90" y1="225.0" x2="925" y2="225.0" stroke="#e5e7eb"/>
+<text x="82" y="229.0" font-size="11" text-anchor="end" font-weight="normal" fill="#111827">0.5</text>
+<line x1="90" y1="175.0" x2="925" y2="175.0" stroke="#e5e7eb"/>
+<text x="82" y="179.0" font-size="11" text-anchor="end" font-weight="normal" fill="#111827">1.0</text>
+<line x1="90" y1="125.0" x2="925" y2="125.0" stroke="#e5e7eb"/>
+<text x="82" y="129.0" font-size="11" text-anchor="end" font-weight="normal" fill="#111827">1.6</text>
+<line x1="90" y1="75.0" x2="925" y2="75.0" stroke="#e5e7eb"/>
+<text x="82" y="79.0" font-size="11" text-anchor="end" font-weight="normal" fill="#111827">2.1</text>
+<text x="90.0" y="295" font-size="11" text-anchor="middle" font-weight="normal" fill="#111827">1</text>
+<text x="298.75" y="295" font-size="11" text-anchor="middle" font-weight="normal" fill="#111827">2</text>
+<text x="507.5" y="295" font-size="11" text-anchor="middle" font-weight="normal" fill="#111827">4</text>
+<text x="716.25" y="295" font-size="11" text-anchor="middle" font-weight="normal" fill="#111827">8</text>
+<text x="925.0" y="295" font-size="11" text-anchor="middle" font-weight="normal" fill="#111827">16</text>
+<polyline points="90.0,206.0 298.8,122.9 507.5,96.4 716.2,109.2 925.0,105.7" fill="none" stroke="#2563eb" stroke-width="3"/>
+<circle cx="90.0" cy="206.0" r="4" fill="#2563eb"/>
+<circle cx="298.8" cy="122.9" r="4" fill="#2563eb"/>
+<circle cx="507.5" cy="96.4" r="4" fill="#2563eb"/>
+<circle cx="716.2" cy="109.2" r="4" fill="#2563eb"/>
+<circle cx="925.0" cy="105.7" r="4" fill="#2563eb"/>
+<rect x="90" y="38" width="13" height="4" fill="#2563eb"/>
+<text x="108" y="45" font-size="12" text-anchor="start" font-weight="normal" fill="#111827">throughput</text>
+<text x="480.0" y="26" font-size="18" text-anchor="middle" font-weight="bold" fill="#111827">QP/ext-thread sweep</text>
+<text x="90" y="342" font-size="13" text-anchor="start" font-weight="bold" fill="#111827">Remote span-v2 latency (us)</text>
+<line x1="90" y1="360" x2="90" y2="565" stroke="#374151"/>
+<line x1="90" y1="565" x2="925" y2="565" stroke="#374151"/>
+<line x1="90" y1="565.0" x2="925" y2="565.0" stroke="#e5e7eb"/>
+<text x="82" y="569.0" font-size="11" text-anchor="end" font-weight="normal" fill="#111827">0.0</text>
+<line x1="90" y1="513.8" x2="925" y2="513.8" stroke="#e5e7eb"/>
+<text x="82" y="517.75" font-size="11" text-anchor="end" font-weight="normal" fill="#111827">36.5</text>
+<line x1="90" y1="462.5" x2="925" y2="462.5" stroke="#e5e7eb"/>
+<text x="82" y="466.5" font-size="11" text-anchor="end" font-weight="normal" fill="#111827">73.0</text>
+<line x1="90" y1="411.2" x2="925" y2="411.2" stroke="#e5e7eb"/>
+<text x="82" y="415.25" font-size="11" text-anchor="end" font-weight="normal" fill="#111827">109.5</text>
+<line x1="90" y1="360.0" x2="925" y2="360.0" stroke="#e5e7eb"/>
+<text x="82" y="364.0" font-size="11" text-anchor="end" font-weight="normal" fill="#111827">145.9</text>
+<line x1="90" y1="522.9" x2="925" y2="522.9" stroke="#f59e0b" stroke-dasharray="6 5"/>
+<text x="921" y="517.8582392281548" font-size="11" text-anchor="end" font-weight="normal" fill="#111827">30 us objective</text>
+<text x="90.0" y="585" font-size="11" text-anchor="middle" font-weight="normal" fill="#111827">1</text>
+<text x="298.75" y="585" font-size="11" text-anchor="middle" font-weight="normal" fill="#111827">2</text>
+<text x="507.5" y="585" font-size="11" text-anchor="middle" font-weight="normal" fill="#111827">4</text>
+<text x="716.25" y="585" font-size="11" text-anchor="middle" font-weight="normal" fill="#111827">8</text>
+<text x="925.0" y="585" font-size="11" text-anchor="middle" font-weight="normal" fill="#111827">16</text>
+<polyline points="90.0,468.8 298.8,483.0 507.5,521.5 716.2,526.2 925.0,528.1" fill="none" stroke="#dc2626" stroke-width="3"/>
+<circle cx="90.0" cy="468.8" r="4" fill="#dc2626"/>
+<circle cx="298.8" cy="483.0" r="4" fill="#dc2626"/>
+<circle cx="507.5" cy="521.5" r="4" fill="#dc2626"/>
+<circle cx="716.2" cy="526.2" r="4" fill="#dc2626"/>
+<circle cx="925.0" cy="528.1" r="4" fill="#dc2626"/>
+<rect x="90" y="323" width="13" height="4" fill="#dc2626"/>
+<text x="108" y="330" font-size="12" text-anchor="start" font-weight="normal" fill="#111827">avg</text>
+<polyline points="90.0,472.9 298.8,486.1 507.5,526.9 716.2,534.0 925.0,535.1" fill="none" stroke="#16a34a" stroke-width="3"/>
+<circle cx="90.0" cy="472.9" r="4" fill="#16a34a"/>
+<circle cx="298.8" cy="486.1" r="4" fill="#16a34a"/>
+<circle cx="507.5" cy="526.9" r="4" fill="#16a34a"/>
+<circle cx="716.2" cy="534.0" r="4" fill="#16a34a"/>
+<circle cx="925.0" cy="535.1" r="4" fill="#16a34a"/>
+<rect x="240" y="323" width="13" height="4" fill="#16a34a"/>
+<text x="258" y="330" font-size="12" text-anchor="start" font-weight="normal" fill="#111827">p50</text>
+<polyline points="90.0,382.0 298.8,402.1 507.5,448.3 716.2,419.3 925.0,431.1" fill="none" stroke="#9333ea" stroke-width="3"/>
+<circle cx="90.0" cy="382.0" r="4" fill="#9333ea"/>
+<circle cx="298.8" cy="402.1" r="4" fill="#9333ea"/>
+<circle cx="507.5" cy="448.3" r="4" fill="#9333ea"/>
+<circle cx="716.2" cy="419.3" r="4" fill="#9333ea"/>
+<circle cx="925.0" cy="431.1" r="4" fill="#9333ea"/>
+<rect x="390" y="323" width="13" height="4" fill="#9333ea"/>
+<text x="408" y="330" font-size="12" text-anchor="start" font-weight="normal" fill="#111827">p99</text>
+<text x="480.0" y="26" font-size="18" text-anchor="middle" font-weight="bold" fill="#111827"></text>
+</svg>

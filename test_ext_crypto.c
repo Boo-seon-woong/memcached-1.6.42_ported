@@ -23,6 +23,8 @@ int main(void) {
     /* AAD mismatch (slot reused by another key) → reject */
     struct ext_aad bad = aad; bad.hv ^= 1;
     assert(ext_crypto_open(back, obj, n, &bad) == -1);
+    assert(ext_crypto_open(back, obj, n, &aad) == (int)ptlen);
+    assert(memcmp(back, pt, ptlen) == 0);
 
     /* torn read: a byte of ciphertext overwritten mid-flight → reject */
     uint8_t torn[256]; memcpy(torn, obj, n);

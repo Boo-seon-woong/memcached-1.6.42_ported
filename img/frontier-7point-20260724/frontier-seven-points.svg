@@ -1,0 +1,93 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1400" height="900" viewBox="0 0 1400 900">
+<style>text{font-family:"DejaVu Sans","Noto Sans KR",sans-serif}</style>
+<rect width="100%" height="100%" fill="#f8fafc"/>
+<text x="70" y="54" font-size="27" text-anchor="start" font-weight="bold" fill="#111827">Remote-memory frontier vs local-memory controls</text>
+<text x="70" y="82" font-size="14" text-anchor="start" font-weight="normal" fill="#111827">10 s GET-only  |  mtT 8 x c16  |  mcT 8  |  Port latency includes decrypt</text>
+<rect x="45" y="105" width="1310" height="430" rx="18" fill="white" stroke="#e2e8f0"/>
+<text x="75" y="137" font-size="17" text-anchor="start" font-weight="bold" fill="#111827">Completed GET throughput</text>
+<text x="1325" y="137" font-size="13" text-anchor="end" font-weight="normal" fill="#111827">M GET/s</text>
+<line x1="90" y1="445.0" x2="1340" y2="445.0" stroke="#e2e8f0"/>
+<text x="78" y="450.0" font-size="12" text-anchor="end" font-weight="normal" fill="#111827">0</text>
+<line x1="90" y1="370.0" x2="1340" y2="370.0" stroke="#e2e8f0"/>
+<text x="78" y="375.0" font-size="12" text-anchor="end" font-weight="normal" fill="#111827">1</text>
+<line x1="90" y1="295.0" x2="1340" y2="295.0" stroke="#e2e8f0"/>
+<text x="78" y="300.0" font-size="12" text-anchor="end" font-weight="normal" fill="#111827">2</text>
+<line x1="90" y1="220.0" x2="1340" y2="220.0" stroke="#e2e8f0"/>
+<text x="78" y="225.0" font-size="12" text-anchor="end" font-weight="normal" fill="#111827">3</text>
+<line x1="90" y1="145.0" x2="1340" y2="145.0" stroke="#e2e8f0"/>
+<text x="78" y="150.0" font-size="12" text-anchor="end" font-weight="normal" fill="#111827">4</text>
+<rect x="142.0" y="306.2" width="92" height="138.8" rx="7" fill="#2563eb"/>
+<text x="188.0" y="296.18532000000005" font-size="13" text-anchor="middle" font-weight="bold" fill="#111827">1.851</text>
+<text x="188.0" y="467" font-size="11" text-anchor="middle" font-weight="normal" fill="#111827">Port QP4/D32</text>
+<rect x="254.0" y="311.6" width="92" height="133.4" rx="7" fill="#60a5fa"/>
+<text x="300.0" y="301.6056" font-size="13" text-anchor="middle" font-weight="bold" fill="#111827">1.779</text>
+<text x="300.0" y="467" font-size="11" text-anchor="middle" font-weight="normal" fill="#111827">Port QP6/D16</text>
+<rect x="366.0" y="296.8" width="92" height="148.2" rx="7" fill="#64748b"/>
+<text x="412.0" y="286.77318" font-size="13" text-anchor="middle" font-weight="bold" fill="#111827">1.976</text>
+<text x="412.0" y="467" font-size="11" text-anchor="middle" font-weight="normal" fill="#111827">Stock local</text>
+<text x="300" y="497" font-size="13" text-anchor="middle" font-weight="bold" fill="#111827">PIPELINE 4</text>
+<rect x="228" y="508" width="144" height="26" rx="13" fill="#eff6ff"/>
+<text x="300" y="526" font-size="11" text-anchor="middle" font-weight="bold" fill="#111827">93.7% of stock</text>
+<rect x="608.0" y="284.1" width="92" height="160.9" rx="7" fill="#2563eb"/>
+<text x="654.0" y="274.08063000000004" font-size="13" text-anchor="middle" font-weight="bold" fill="#111827">2.146</text>
+<text x="654.0" y="467" font-size="11" text-anchor="middle" font-weight="normal" fill="#111827">Port QP8/D16</text>
+<rect x="720.0" y="247.4" width="92" height="197.6" rx="7" fill="#64748b"/>
+<text x="766.0" y="237.35667" font-size="13" text-anchor="middle" font-weight="bold" fill="#111827">2.635</text>
+<text x="766.0" y="467" font-size="11" text-anchor="middle" font-weight="normal" fill="#111827">Stock local</text>
+<text x="710" y="497" font-size="13" text-anchor="middle" font-weight="bold" fill="#111827">PIPELINE 6</text>
+<rect x="638" y="508" width="144" height="26" rx="13" fill="#eff6ff"/>
+<text x="710" y="526" font-size="11" text-anchor="middle" font-weight="bold" fill="#111827">81.4% of stock</text>
+<rect x="1018.0" y="261.6" width="92" height="183.4" rx="7" fill="#1d4ed8"/>
+<text x="1064.0" y="251.5944" font-size="13" text-anchor="middle" font-weight="bold" fill="#111827">2.445</text>
+<text x="1064.0" y="467" font-size="11" text-anchor="middle" font-weight="normal" fill="#111827">Port QP8/D16</text>
+<rect x="1130.0" y="192.2" width="92" height="252.8" rx="7" fill="#64748b"/>
+<text x="1176.0" y="182.15478" font-size="13" text-anchor="middle" font-weight="bold" fill="#111827">3.371</text>
+<text x="1176.0" y="467" font-size="11" text-anchor="middle" font-weight="normal" fill="#111827">Stock local</text>
+<text x="1120" y="497" font-size="13" text-anchor="middle" font-weight="bold" fill="#111827">PIPELINE 8</text>
+<rect x="1048" y="508" width="144" height="26" rx="13" fill="#eff6ff"/>
+<text x="1120" y="526" font-size="11" text-anchor="middle" font-weight="bold" fill="#111827">72.5% of stock</text>
+<rect x="45" y="545" width="1310" height="320" rx="18" fill="white" stroke="#e2e8f0"/>
+<text x="75" y="582" font-size="17" text-anchor="start" font-weight="bold" fill="#111827">Port remote span-v2 latency</text>
+<text x="1325" y="582" font-size="12" text-anchor="end" font-weight="normal" fill="#111827">microseconds  |  line = p50 to p99  |  dot = avg</text>
+<line x1="90" y1="830.0" x2="1340" y2="830.0" stroke="#e2e8f0"/>
+<text x="78" y="835.0" font-size="12" text-anchor="end" font-weight="normal" fill="#111827">0</text>
+<line x1="90" y1="777.5" x2="1340" y2="777.5" stroke="#e2e8f0"/>
+<text x="78" y="782.5" font-size="12" text-anchor="end" font-weight="normal" fill="#111827">20</text>
+<line x1="90" y1="725.0" x2="1340" y2="725.0" stroke="#e2e8f0"/>
+<text x="78" y="730.0" font-size="12" text-anchor="end" font-weight="normal" fill="#111827">40</text>
+<line x1="90" y1="672.5" x2="1340" y2="672.5" stroke="#e2e8f0"/>
+<text x="78" y="677.5" font-size="12" text-anchor="end" font-weight="normal" fill="#111827">60</text>
+<line x1="90" y1="620.0" x2="1340" y2="620.0" stroke="#e2e8f0"/>
+<text x="78" y="625.0" font-size="12" text-anchor="end" font-weight="normal" fill="#111827">80</text>
+<line x1="90" y1="751.2" x2="1340" y2="751.2" stroke="#f59e0b" stroke-width="2" stroke-dasharray="8 6"/>
+<rect x="1184" y="724.2" width="156" height="23" rx="11" fill="#fffbeb"/>
+<text x="1330" y="741.25" font-size="11" text-anchor="end" font-weight="bold" fill="#111827">30 us objective</text>
+<line x1="235" y1="759.1" x2="235" y2="667.8" stroke="#60a5fa" stroke-width="14" stroke-linecap="round" opacity="0.45"/>
+<circle cx="235" cy="759.1" r="6" fill="#16a34a"/>
+<circle cx="235" cy="667.8" r="6" fill="#7c3aed"/>
+<circle cx="235" cy="755.1" r="9" fill="#dc2626" stroke="white" stroke-width="3"/>
+<text x="235" y="655.775" font-size="11" text-anchor="middle" font-weight="bold" fill="#111827">p99 61.8</text>
+<text x="235" y="855" font-size="12" text-anchor="middle" font-weight="bold" fill="#111827">QP4 / D32 / P4</text>
+<text x="235" y="875" font-size="11" text-anchor="middle" font-weight="normal" fill="#111827">avg 28.519 us</text>
+<line x1="535" y1="782.8" x2="535" y2="711.6" stroke="#60a5fa" stroke-width="14" stroke-linecap="round" opacity="0.45"/>
+<circle cx="535" cy="782.8" r="6" fill="#16a34a"/>
+<circle cx="535" cy="711.6" r="6" fill="#7c3aed"/>
+<circle cx="535" cy="779.9" r="9" fill="#dc2626" stroke="white" stroke-width="3"/>
+<text x="535" y="699.6125" font-size="11" text-anchor="middle" font-weight="bold" fill="#111827">p99 45.1</text>
+<text x="535" y="855" font-size="12" text-anchor="middle" font-weight="bold" fill="#111827">QP6 / D16 / P4</text>
+<text x="535" y="875" font-size="11" text-anchor="middle" font-weight="normal" fill="#111827">avg 19.077 us</text>
+<line x1="835" y1="778.3" x2="835" y2="646.5" stroke="#60a5fa" stroke-width="14" stroke-linecap="round" opacity="0.45"/>
+<circle cx="835" cy="778.3" r="6" fill="#16a34a"/>
+<circle cx="835" cy="646.5" r="6" fill="#7c3aed"/>
+<circle cx="835" cy="773.2" r="9" fill="#dc2626" stroke="white" stroke-width="3"/>
+<text x="835" y="634.5125" font-size="11" text-anchor="middle" font-weight="bold" fill="#111827">p99 69.9</text>
+<text x="835" y="855" font-size="12" text-anchor="middle" font-weight="bold" fill="#111827">QP8 / D16 / P6</text>
+<text x="835" y="875" font-size="11" text-anchor="middle" font-weight="normal" fill="#111827">avg 21.636 us</text>
+<line x1="1135" y1="776.7" x2="1135" y2="673.5" stroke="#1d4ed8" stroke-width="14" stroke-linecap="round" opacity="0.45"/>
+<circle cx="1135" cy="776.7" r="6" fill="#16a34a"/>
+<circle cx="1135" cy="673.5" r="6" fill="#7c3aed"/>
+<circle cx="1135" cy="771.6" r="9" fill="#dc2626" stroke="white" stroke-width="3"/>
+<text x="1135" y="661.55" font-size="11" text-anchor="middle" font-weight="bold" fill="#111827">p99 59.6</text>
+<text x="1135" y="855" font-size="12" text-anchor="middle" font-weight="bold" fill="#111827">QP8 / D16 / P8</text>
+<text x="1135" y="875" font-size="11" text-anchor="middle" font-weight="normal" fill="#111827">avg 22.252 us</text>
+</svg>

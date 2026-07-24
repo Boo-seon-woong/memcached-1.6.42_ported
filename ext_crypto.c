@@ -7,6 +7,8 @@
 static uint8_t g_key[32];
 static uint32_t g_salt;
 static _Atomic uint64_t g_ctr;
+static _Thread_local EVP_CIPHER_CTX *g_seal_ctx;
+static _Thread_local EVP_CIPHER_CTX *g_open_ctx;
 
 void ext_crypto_init(const uint8_t key[32]) {
     memcpy(g_key, key, 32);
@@ -24,15 +26,25 @@ static void make_nonce(uint8_t n[12]) {
     memcpy(n + 4, &c, 8);
 }
 
+static EVP_CIPHER_CTX *get_ctx(EVP_CIPHER_CTX **slot, int encrypt) {
+    if (*slot) return *slot;
+    EVP_CIPHER_CTX *ctx = EVP_CIPHER_CTX_new();
+    if (!ctx) return NULL;
+    if (EVP_CipherInit_ex(ctx, EVP_aes_256_gcm(), NULL, NULL, NULL, encrypt) != 1 ||
+            EVP_CIPHER_CTX_ctrl(ctx, EVP_CTRL_GCM_SET_IVLEN, 12, NULL) != 1) {
+        EVP_CIPHER_CTX_free(ctx);
+        return NULL;
+    }
+    return *slot = ctx;
+}
+
 int ext_crypto_seal(uint8_t *out, const void *pt, size_t ptlen,
                     const struct ext_aad *aad) {
     uint8_t nonce[12];
     make_nonce(nonce);
-    EVP_CIPHER_CTX *ctx = EVP_CIPHER_CTX_new();
+    EVP_CIPHER_CTX *ctx = get_ctx(&g_seal_ctx, 1);
     if (!ctx) return -1;
     int len, rv = -1;
-    if (EVP_EncryptInit_ex(ctx, EVP_aes_256_gcm(), NULL, NULL, NULL) != 1) goto out;
-    if (EVP_CIPHER_CTX_ctrl(ctx, EVP_CTRL_GCM_SET_IVLEN, 12, NULL) != 1) goto out;
     if (EVP_EncryptInit_ex(ctx, NULL, NULL, g_key, nonce) != 1) goto out;
     if (EVP_EncryptUpdate(ctx, NULL, &len, (const uint8_t *)aad, sizeof(*aad)) != 1) goto out;
     if (EVP_EncryptUpdate(ctx, out + 12, &len, pt, ptlen) != 1) goto out;
@@ -41,7 +53,10 @@ int ext_crypto_seal(uint8_t *out, const void *pt, size_t ptlen,
     memcpy(out, nonce, 12);
     rv = (int)ptlen + EXT_CRYPTO_OVERHEAD;
 out:
-    EVP_CIPHER_CTX_free(ctx);
+    if (rv < 0) {
+        EVP_CIPHER_CTX_free(ctx);
+        g_seal_ctx = NULL;
+    }
     return rv;
 }
 
@@ -53,11 +68,9 @@ int ext_crypto_open(void *pt_out, const uint8_t *in, size_t inlen,
     const uint8_t *ct = in + 12;
     uint8_t tag[16];
     memcpy(tag, in + inlen - 16, 16);        /* copy: DecryptFinal wants non-const */
-    EVP_CIPHER_CTX *ctx = EVP_CIPHER_CTX_new();
+    EVP_CIPHER_CTX *ctx = get_ctx(&g_open_ctx, 0);
     if (!ctx) return -1;
     int len, rv = -1;
-    if (EVP_DecryptInit_ex(ctx, EVP_aes_256_gcm(), NULL, NULL, NULL) != 1) goto out;
-    if (EVP_CIPHER_CTX_ctrl(ctx, EVP_CTRL_GCM_SET_IVLEN, 12, NULL) != 1) goto out;
     if (EVP_DecryptInit_ex(ctx, NULL, NULL, g_key, nonce) != 1) goto out;
     if (EVP_DecryptUpdate(ctx, NULL, &len, (const uint8_t *)aad, sizeof(*aad)) != 1) goto out;
     if (EVP_DecryptUpdate(ctx, pt_out, &len, ct, ctlen) != 1) goto out;
@@ -65,6 +78,9 @@ int ext_crypto_open(void *pt_out, const uint8_t *in, size_t inlen,
     if (EVP_DecryptFinal_ex(ctx, (uint8_t *)pt_out + len, &len) != 1) goto out;  /* tag check */
     rv = (int)ctlen;
 out:
-    EVP_CIPHER_CTX_free(ctx);
+    if (rv < 0) {
+        EVP_CIPHER_CTX_free(ctx);
+        g_open_ctx = NULL;
+    }
     return rv;
 }

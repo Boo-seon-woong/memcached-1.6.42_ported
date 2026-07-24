@@ -1,0 +1,42 @@
+/*
+ * Software CPU-clock samples; no vPMU event is used.
+ * argv: 8 worker TIDs, 4 io TIDs, 8 client TIDs. Missing TIDs are zero.
+ * group: 1=worker, 2=io, 3=client.
+ */
+BEGIN
+{
+    if ($1)  { @group[$1] = 1; }  if ($2)  { @group[$2] = 1; }
+    if ($3)  { @group[$3] = 1; }  if ($4)  { @group[$4] = 1; }
+    if ($5)  { @group[$5] = 1; }  if ($6)  { @group[$6] = 1; }
+    if ($7)  { @group[$7] = 1; }  if ($8)  { @group[$8] = 1; }
+    if ($9)  { @group[$9] = 2; }  if ($10) { @group[$10] = 2; }
+    if ($11) { @group[$11] = 2; } if ($12) { @group[$12] = 2; }
+    if ($13) { @group[$13] = 3; } if ($14) { @group[$14] = 3; }
+    if ($15) { @group[$15] = 3; } if ($16) { @group[$16] = 3; }
+    if ($17) { @group[$17] = 3; } if ($18) { @group[$18] = 3; }
+    if ($19) { @group[$19] = 3; } if ($20) { @group[$20] = 3; }
+}
+
+profile:hz:249
+/@group[tid]/
+{
+    @samples[@group[tid], kstack(perf, 6), ustack(perf, 6)] = count();
+    @totals[@group[tid]] = count();
+}
+
+tracepoint:raw_syscalls:sys_enter
+/@group[tid]/
+{
+    @calls[@group[tid], args.id] = count();
+}
+
+END
+{
+    print(@samples);
+    print(@totals);
+    print(@calls);
+    clear(@samples);
+    clear(@totals);
+    clear(@calls);
+    clear(@group);
+}

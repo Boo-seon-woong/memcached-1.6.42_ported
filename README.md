@@ -4,6 +4,10 @@
 [`md/experiment.md`](md/experiment.md)를 위에서 아래로 따라 실행한다.
 원본 memcached 대비 source-level 변경 명세는
 [`SOURCE_CHANGE_SPEC.md`](SOURCE_CHANGE_SPEC.md)를 참조한다.
+CPU-µs/op 상세 회계와 최적화 우선순위는
+[`md/CPU_COST_ACCOUNTING.md`](md/CPU_COST_ACCOUNTING.md)에 있다.
+최적화를 하나씩 적용한 동일 workload 비교는
+[`md/CPU_OPTIMIZATION_ROLLOUT.md`](md/CPU_OPTIMIZATION_ROLLOUT.md)에 기록한다.
 extstore가 켜지면 성공한 SET value는 AES-256-GCM으로 원격 WRITE가 완료된 뒤
 `ITEM_HDR` metadata만 local RAM에 남으며, local value cache/fallback은 없다.
 

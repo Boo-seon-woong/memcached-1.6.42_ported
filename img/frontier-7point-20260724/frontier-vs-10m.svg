@@ -1,0 +1,43 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1200" height="650" viewBox="0 0 1200 650">
+<style>text{font-family:"DejaVu Sans","Noto Sans KR",sans-serif}</style>
+<rect width="100%" height="100%" fill="#f8fafc"/>
+<text x="60" y="58" font-size="27" text-anchor="start" font-weight="bold" fill="#111827">The 10M target is outside the same-shape local ceiling</text>
+<text x="60" y="88" font-size="14" text-anchor="start" font-weight="normal" fill="#111827">Pipeline 8  |  mtT 8 x c16  |  mcT 8  |  10-second completed GET count</text>
+<rect x="45" y="120" width="1110" height="310" rx="18" fill="white" stroke="#e2e8f0"/>
+<line x1="245.0" y1="160" x2="245.0" y2="370" stroke="#e2e8f0"/>
+<text x="245.0" y="397" font-size="12" text-anchor="middle" font-weight="normal" fill="#111827">0M</text>
+<line x1="416.0" y1="160" x2="416.0" y2="370" stroke="#e2e8f0"/>
+<text x="416.0" y="397" font-size="12" text-anchor="middle" font-weight="normal" fill="#111827">2M</text>
+<line x1="587.0" y1="160" x2="587.0" y2="370" stroke="#e2e8f0"/>
+<text x="587.0" y="397" font-size="12" text-anchor="middle" font-weight="normal" fill="#111827">4M</text>
+<line x1="758.0" y1="160" x2="758.0" y2="370" stroke="#e2e8f0"/>
+<text x="758.0" y="397" font-size="12" text-anchor="middle" font-weight="normal" fill="#111827">6M</text>
+<line x1="929.0" y1="160" x2="929.0" y2="370" stroke="#e2e8f0"/>
+<text x="929.0" y="397" font-size="12" text-anchor="middle" font-weight="normal" fill="#111827">8M</text>
+<line x1="1100.0" y1="160" x2="1100.0" y2="370" stroke="#e2e8f0"/>
+<text x="1100.0" y="397" font-size="12" text-anchor="middle" font-weight="normal" fill="#111827">10M</text>
+<line x1="1100" y1="145" x2="1100" y2="375" stroke="#dc2626" stroke-width="4"/>
+<rect x="974" y="134" width="126" height="28" rx="14" fill="#fee2e2"/>
+<text x="1088" y="154" font-size="12" text-anchor="end" font-weight="bold" fill="#111827">10M target</text>
+<text x="227" y="221" font-size="13" text-anchor="end" font-weight="bold" fill="#111827">Port QP8 / depth16 / pipeline8</text>
+<rect x="245" y="191" width="855" height="48" rx="10" fill="#f1f5f9"/>
+<rect x="245" y="191" width="209.1" height="48" rx="10" fill="#2563eb"/>
+<text x="466.082384" y="221" font-size="13" text-anchor="start" font-weight="bold" fill="#111827">2.445 M/s  (24.5% of target)</text>
+<text x="227" y="321" font-size="13" text-anchor="end" font-weight="bold" fill="#111827">Stock local / pipeline8</text>
+<rect x="245" y="291" width="855" height="48" rx="10" fill="#f1f5f9"/>
+<rect x="245" y="291" width="288.2" height="48" rx="10" fill="#64748b"/>
+<text x="545.2435508000001" y="321" font-size="13" text-anchor="start" font-weight="bold" fill="#111827">3.371 M/s  (33.7% of target)</text>
+<rect x="55" y="465" width="310" height="125" rx="16" fill="white" stroke="#e2e8f0"/>
+<text x="77" y="495" font-size="11" text-anchor="start" font-weight="bold" fill="#111827">PORT / STOCK</text>
+<text x="77" y="540" font-size="29" text-anchor="start" font-weight="bold" fill="#111827">72.5%</text>
+<text x="77" y="568" font-size="11" text-anchor="start" font-weight="normal" fill="#111827">remote path retains most local throughput</text>
+<rect x="405" y="465" width="310" height="125" rx="16" fill="white" stroke="#e2e8f0"/>
+<text x="427" y="495" font-size="11" text-anchor="start" font-weight="bold" fill="#111827">STOCK TO 10M</text>
+<text x="427" y="540" font-size="29" text-anchor="start" font-weight="bold" fill="#111827">2.97x</text>
+<text x="427" y="568" font-size="11" text-anchor="start" font-weight="normal" fill="#111827">required after removing RDMA and crypto</text>
+<rect x="755" y="465" width="310" height="125" rx="16" fill="white" stroke="#e2e8f0"/>
+<text x="777" y="495" font-size="11" text-anchor="start" font-weight="bold" fill="#111827">PORT TO 10M</text>
+<text x="777" y="540" font-size="29" text-anchor="start" font-weight="bold" fill="#111827">4.09x</text>
+<text x="777" y="568" font-size="11" text-anchor="start" font-weight="normal" fill="#111827">required at the &lt;30 us optimum</text>
+<text x="600" y="625" font-size="12" text-anchor="middle" font-weight="normal" fill="#111827">Scope: same pipeline/thread shape; stock pipeline 8 was still scaling and is not an absolute hardware ceiling.</text>
+</svg>

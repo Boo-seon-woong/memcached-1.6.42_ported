@@ -30,7 +30,8 @@ struct extstore_stats {
      * Populated only when EXT_RDMA_PROF=1; reset by extstore_prof_reset. */
     uint64_t prof_read_count,  prof_read_avg_ns,  prof_read_p50_ns,  prof_read_p99_ns;
     uint64_t prof_write_count, prof_write_avg_ns, prof_write_p50_ns, prof_write_p99_ns;
-    /* admin's breakout: sync (SWIOTLB advise) vs transfer (post..CQE) avg, ns. */
+    /* Span v2 breakout: crypto + sync (SWIOTLB advise) + transfer, avg ns. */
+    uint64_t prof_read_crypto_avg_ns, prof_write_crypto_avg_ns;
     uint64_t prof_read_sync_avg_ns,  prof_read_xfer_avg_ns;
     uint64_t prof_write_sync_avg_ns, prof_write_xfer_avg_ns;
     struct extstore_page_data *page_data;
@@ -82,9 +83,8 @@ struct _obj_io {
     enum obj_io_mode mode;
     obj_io_cb cb;
     unsigned char retries; /* read retry count (torn-read / tag fail) */
-    /* EXT_RDMA_PROF (runtime): D6 in-server span. t_start = before the
-     * SYNC_FOR_DEVICE advise (WRITE) or before ibv_post_send (READ); t_end =
-     * WRITE CQE reaped, or READ CQE + SYNC_FOR_CPU complete. rdtsc cycles. */
+    /* EXT_RDMA_PROF span v2: READ pre-post through post-decrypt;
+     * WRITE pre-encrypt through CQE. t_end is an intermediate boundary. */
     uint64_t t_start, t_end;
 };
 
@@ -115,6 +115,9 @@ void extstore_staging_put(void *ptr, char *slot);
 int extstore_check(void *ptr, unsigned int page_id, uint64_t page_version);
 int extstore_delete(void *ptr, unsigned int page_id, uint64_t page_version, unsigned int count, unsigned int bytes);
 void extstore_get_stats(void *ptr, struct extstore_stats *st);
+uint64_t extstore_prof_stamp(void);
+void extstore_prof_read_done(void *ptr, obj_io *io,
+        uint64_t crypto_start, uint64_t crypto_done);
 /* EXT_RDMA_PROF: clear the per-op span histograms (call at phase start). */
 void extstore_prof_reset(void *ptr);
 void extstore_get_page_data(void *ptr, struct extstore_stats *st);

@@ -1,0 +1,11 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="960" height="420" viewBox="0 0 960 420">
+<rect width="100%" height="100%" fill="white"/>
+<text x="480.0" y="32" font-size="18" text-anchor="middle" font-weight="bold" fill="#111827">Remote port vs stock local-memory control</text>
+<rect x="230" y="145.4" width="180" height="189.6" fill="#2563eb"/>
+<text x="320" y="360" font-size="14" text-anchor="middle" font-weight="normal" fill="#111827">Port remote</text>
+<text x="320" y="135.39528038796686" font-size="14" text-anchor="middle" font-weight="bold" fill="#111827">1.770 M GET/s</text>
+<rect x="540" y="108.9" width="180" height="226.1" fill="#6b7280"/>
+<text x="630" y="360" font-size="14" text-anchor="middle" font-weight="normal" fill="#111827">Stock local</text>
+<text x="630" y="98.91304347826085" font-size="14" text-anchor="middle" font-weight="bold" fill="#111827">2.110 M GET/s</text>
+<text x="480.0" y="397" font-size="13" text-anchor="middle" font-weight="normal" fill="#111827">Latency is intentionally not compared: port=remote span-v2, stock=memtier end-to-end.</text>
+</svg>

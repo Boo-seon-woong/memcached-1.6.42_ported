@@ -33,6 +33,7 @@
 static int g_prof_on = 0;
 static unsigned int g_batch_limit = 32;      /* posting-round cap (<= wrs[] size) */
 static double g_ns_per_cycle = 0.0;          /* rdtsc cycle -> ns */
+static _Thread_local unsigned int g_submit_io_idx = UINT_MAX;
 
 static inline uint64_t prof_rdtsc(void) { return __builtin_ia32_rdtsc(); }
 
@@ -127,15 +128,16 @@ typedef struct {
     struct ibv_qp *qp;
     struct ibv_cq *cq;
     char *bounce_base;            /* read_slots * slot_size */
-    uint64_t bounce_free;         /* bit=1 -> slot free (read_slots <= 64) */
-    unsigned int outstanding;
+    uint64_t bounce_free;         /* IO-thread owned; bit=1 -> slot free */
+    unsigned int outstanding;     /* IO-thread owned */
     store_engine *e;
     pthread_t tid;
     /* EXT_RDMA_PROF: per-thread span histogram (lock-free; aggregated on read).
      * PROF_BUCKETS x PROF_BUCKET_NS covers 0..~102us; bucket = ns/100 clamped. */
     uint64_t prof_r_count, prof_w_count, prof_r_sum_ns, prof_w_sum_ns;
     uint32_t prof_r_hist[32768], prof_w_hist[32768];
-    /* admin's breakout: sync (advise) vs transfer (post..CQE) portion, ns sums. */
+    /* Span v2 breakout, ns sums. */
+    uint64_t prof_r_crypto_ns, prof_w_crypto_ns;
     uint64_t prof_r_sync_ns, prof_r_xfer_ns, prof_w_sync_ns, prof_w_xfer_ns;
 } store_iothr;
 
@@ -301,13 +303,15 @@ static void *extstore_io_thread(void *arg) {
             int nd = 0;
             for (int i = 0; i < n; i++)
                 if (wrs[i].opcode == IBV_WR_RDMA_WRITE) dev_sg[nd++] = sg[i];
-            /* WRITE span opens here — before the SYNC_FOR_DEVICE advise (D6). */
-            if (g_prof_on) {
-                uint64_t ts = prof_rdtsc();
+            uint64_t t_sync_start = g_prof_on && nd ? prof_rdtsc() : 0;
+            if (t_sync_start)
                 for (int i = 0; i < n; i++)
-                    if (wrs[i].opcode == IBV_WR_RDMA_WRITE)
-                        ((obj_io *)(uintptr_t)wrs[i].wr_id)->t_start = ts;
-            }
+                    if (wrs[i].opcode == IBV_WR_RDMA_WRITE) {
+                        obj_io *io = (obj_io *)(uintptr_t)wrs[i].wr_id;
+                        if (io->t_start && io->t_end >= io->t_start)
+                            t->prof_w_crypto_ns += (uint64_t)
+                                    ((io->t_end - io->t_start) * g_ns_per_cycle);
+                    }
             if (nd) {
                 int adv = ibv_advise_mr(e->pd, IBV_ADVISE_MR_ADVICE_SYNC_FOR_DEVICE,
                                         IBV_ADVISE_MR_FLAG_FLUSH, dev_sg, nd);
@@ -316,20 +320,25 @@ static void *extstore_io_thread(void *arg) {
                     fprintf(stderr, "extstore: ibv_advise_mr(SYNC_FOR_DEVICE) failed: %s"
                             " — writes may transmit pre-DMA contents\n", strerror(adv));
             }
-            /* per-write t_end = SYNC_FOR_DEVICE done: splits WRITE span into
-             * sync (t_end - t_start) and transfer (CQE - t_end). */
+            /* WRITE t_end advances from post-encrypt to post-sync. */
             if (g_prof_on && nd) {
                 uint64_t ts = prof_rdtsc();
                 for (int i = 0; i < n; i++)
-                    if (wrs[i].opcode == IBV_WR_RDMA_WRITE)
+                    if (wrs[i].opcode == IBV_WR_RDMA_WRITE) {
                         ((obj_io *)(uintptr_t)wrs[i].wr_id)->t_end = ts;
+                        t->prof_w_sync_ns += (uint64_t)
+                                ((ts - t_sync_start) * g_ns_per_cycle);
+                    }
             }
-            /* READ span opens here — immediately before ibv_post_send (D6). */
+            /* READ span v2 opens immediately before post and closes after open. */
             if (g_prof_on) {
                 uint64_t ts = prof_rdtsc();
                 for (int i = 0; i < n; i++)
-                    if (wrs[i].opcode == IBV_WR_RDMA_READ)
-                        ((obj_io *)(uintptr_t)wrs[i].wr_id)->t_start = ts;
+                    if (wrs[i].opcode == IBV_WR_RDMA_READ) {
+                        obj_io *io = (obj_io *)(uintptr_t)wrs[i].wr_id;
+                        io->t_start = ts;
+                        io->t_end = 0;
+                    }
             }
             if (ibv_post_send(t->qp, &wrs[0], &bad)) {
                 atomic_store(&e->dead, 1);
@@ -348,7 +357,7 @@ static void *extstore_io_thread(void *arg) {
                     io->cb(e, io, -1);
                 }
             } else {
-                pthread_mutex_lock(&t->mutex); t->outstanding += n; pthread_mutex_unlock(&t->mutex);
+                t->outstanding += n;
             }
         }
 
@@ -383,14 +392,12 @@ static void *extstore_io_thread(void *arg) {
             obj_io *io = (obj_io *)(uintptr_t)wc[i].wr_id;
             if (g_prof_on && wc[i].status == IBV_WC_SUCCESS && io->t_start) {
                 if (io->mode == OBJ_IO_READ) {
-                    prof_record(t->prof_r_hist, &t->prof_r_count, &t->prof_r_sum_ns,
-                                t_sync_done - io->t_start);
                     t->prof_r_xfer_ns += (uint64_t)((t_poll - io->t_start) * g_ns_per_cycle);
                     t->prof_r_sync_ns += (uint64_t)((t_sync_done - t_poll) * g_ns_per_cycle);
+                    io->t_end = t_sync_done;
                 } else {
                     prof_record(t->prof_w_hist, &t->prof_w_count, &t->prof_w_sum_ns,
                                 t_poll - io->t_start);
-                    t->prof_w_sync_ns += (uint64_t)((io->t_end - io->t_start) * g_ns_per_cycle);
                     t->prof_w_xfer_ns += (uint64_t)((t_poll - io->t_end) * g_ns_per_cycle);
                 }
             }
@@ -414,14 +421,14 @@ static void *extstore_io_thread(void *arg) {
             io->cb(e, io, ok ? (int)len : -1);
             if (is_read) {
                 int s = (buf - t->bounce_base) / e->slot_size;
-                pthread_mutex_lock(&t->mutex); t->bounce_free |= 1ULL << s; pthread_mutex_unlock(&t->mutex);
+                t->bounce_free |= 1ULL << s;
             } else if (ok) {
                 STAT_L(e);
                 e->stats.objects_written++; e->stats.bytes_written += len;
                 STAT_UL(e);
             }
         }
-        pthread_mutex_lock(&t->mutex); t->outstanding -= c; pthread_mutex_unlock(&t->mutex);
+        t->outstanding -= c;
         STAT_L(e);
         e->stats.objects_read += nsync;
         for (int i = 0; i < nsync; i++) e->stats.bytes_read += sync_sg[i].length;
@@ -678,8 +685,10 @@ int extstore_submit(void *ptr, obj_io *io) {
         obj_io *nx; for (obj_io *p = io; p; p = nx) { nx = p->next; p->cb(e, p, -1); }
         return 0;
     }
-    unsigned int idx = __atomic_fetch_add(&e->last_io_thread, 1, __ATOMIC_RELAXED)
-                       % e->io_threadcount;
+    if (g_submit_io_idx >= e->io_threadcount)
+        g_submit_io_idx = __atomic_fetch_add(&e->last_io_thread, 1,
+                __ATOMIC_RELAXED) % e->io_threadcount;
+    unsigned int idx = g_submit_io_idx;
     store_iothr *t = &e->io_threads[idx];
     obj_io *tail = io; while (tail->next) tail = tail->next;
     pthread_mutex_lock(&t->mutex);
@@ -773,12 +782,15 @@ void extstore_get_stats(void *ptr, struct extstore_stats *st) {
                        &st->prof_read_p50_ns, &st->prof_read_p99_ns);
         prof_summarize(e, 0, &st->prof_write_count, &st->prof_write_avg_ns,
                        &st->prof_write_p50_ns, &st->prof_write_p99_ns);
-        uint64_t rs = 0, rx = 0, ws = 0, wx = 0;
+        uint64_t rc = 0, wc = 0, rs = 0, rx = 0, ws = 0, wx = 0;
         for (unsigned int i = 0; i < e->io_threadcount; i++) {
             store_iothr *t = &e->io_threads[i];
+            rc += t->prof_r_crypto_ns; wc += t->prof_w_crypto_ns;
             rs += t->prof_r_sync_ns; rx += t->prof_r_xfer_ns;
             ws += t->prof_w_sync_ns; wx += t->prof_w_xfer_ns;
         }
+        st->prof_read_crypto_avg_ns = st->prof_read_count ? rc / st->prof_read_count : 0;
+        st->prof_write_crypto_avg_ns = st->prof_write_count ? wc / st->prof_write_count : 0;
         st->prof_read_sync_avg_ns  = st->prof_read_count  ? rs / st->prof_read_count  : 0;
         st->prof_read_xfer_avg_ns  = st->prof_read_count  ? rx / st->prof_read_count  : 0;
         st->prof_write_sync_avg_ns = st->prof_write_count ? ws / st->prof_write_count : 0;
@@ -791,9 +803,36 @@ void extstore_prof_reset(void *ptr) {
     for (unsigned int i = 0; i < e->io_threadcount; i++) {
         store_iothr *t = &e->io_threads[i];
         t->prof_r_count = t->prof_w_count = t->prof_r_sum_ns = t->prof_w_sum_ns = 0;
+        t->prof_r_crypto_ns = t->prof_w_crypto_ns = 0;
         t->prof_r_sync_ns = t->prof_r_xfer_ns = t->prof_w_sync_ns = t->prof_w_xfer_ns = 0;
         memset(t->prof_r_hist, 0, sizeof(t->prof_r_hist));
         memset(t->prof_w_hist, 0, sizeof(t->prof_w_hist));
+    }
+}
+
+uint64_t extstore_prof_stamp(void) {
+    return g_prof_on ? prof_rdtsc() : 0;
+}
+
+void extstore_prof_read_done(void *ptr, obj_io *io,
+        uint64_t crypto_start, uint64_t crypto_done) {
+    if (!g_prof_on || !io->t_start || !io->t_end ||
+            crypto_done < crypto_start)
+        return;
+    store_engine *e = ptr;
+    uintptr_t buf = (uintptr_t)io->buf;
+    for (unsigned int i = 0; i < e->io_threadcount; i++) {
+        store_iothr *t = &e->io_threads[i];
+        uintptr_t start = (uintptr_t)t->bounce_base;
+        uintptr_t end = start + (size_t)e->read_slots * e->slot_size;
+        if (buf >= start && buf < end) {
+            prof_record(t->prof_r_hist, &t->prof_r_count, &t->prof_r_sum_ns,
+                        crypto_done - io->t_start);
+            t->prof_r_crypto_ns += (uint64_t)
+                    ((crypto_done - crypto_start) * g_ns_per_cycle);
+            io->t_start = io->t_end = 0;
+            return;
+        }
     }
 }
 

@@ -30,6 +30,12 @@ static _Atomic uint64_t g_flush_log_ct = 0;       // rate-limit for the flush di
  * as a torn read. These name which path it is. */
 static _Atomic uint64_t g_abort_chunked = 0;   /* P-6: item too large */
 static _Atomic uint64_t g_abort_alloc = 0;     /* no read destination available */
+static _Atomic uint64_t g_plaintext_slab_fallback = 0;
+static unsigned int g_plaintext_slot_size;
+static _Thread_local cache_t *g_plaintext_cache;
+
+/* 4096 offered requests / 8 workers = 512 nominal; leave burst headroom. */
+#define PLAINTEXT_POOL_LIMIT 1024
 
 /* EXT_TRACE_SEAL=1: table indexed by nonce counter (dense, monotonic) recording
  * who sealed each object and at what length, so a badcrc can compare the length
@@ -82,6 +88,7 @@ typedef struct _io_pending_storage_t {
     item *hdr_it;             /* original header item. */
     item *read_it;            /* decrypt destination (RDMA: != io.buf bounce slot) */
     unsigned int read_clsid;  /* slab class of read_it, for freeing */
+    cache_t *read_cache;      /* worker-private cache, NULL for slab fallback */
     obj_io io_ctx;            /* embedded extstore IO header */
     unsigned int iovec_data;  /* specific index of data iovec */
     bool noreply;             /* whether the response had noreply set */
@@ -174,7 +181,10 @@ void storage_stats(ADD_STAT add_stats, void *c) {
                 (unsigned long long)atomic_load(&g_abort_chunked));
         APPEND_STAT("extstore_get_aborted_alloc", "%llu",
                 (unsigned long long)atomic_load(&g_abort_alloc));
-        // D6 in-server span distribution (ns); populated only under EXT_RDMA_PROF=1.
+        APPEND_STAT("extstore_plaintext_slab_fallback", "%llu",
+                (unsigned long long)atomic_load(&g_plaintext_slab_fallback));
+        APPEND_STAT("extstore_prof_span_ver", "%u", 2);
+        // Span v2 distribution (ns); populated only under EXT_RDMA_PROF=1.
         APPEND_STAT("extstore_prof_read_count", "%llu", (unsigned long long)st.prof_read_count);
         APPEND_STAT("extstore_prof_read_avg_ns", "%llu", (unsigned long long)st.prof_read_avg_ns);
         APPEND_STAT("extstore_prof_read_p50_ns", "%llu", (unsigned long long)st.prof_read_p50_ns);
@@ -183,7 +193,11 @@ void storage_stats(ADD_STAT add_stats, void *c) {
         APPEND_STAT("extstore_prof_write_avg_ns", "%llu", (unsigned long long)st.prof_write_avg_ns);
         APPEND_STAT("extstore_prof_write_p50_ns", "%llu", (unsigned long long)st.prof_write_p50_ns);
         APPEND_STAT("extstore_prof_write_p99_ns", "%llu", (unsigned long long)st.prof_write_p99_ns);
-        // breakout: sync (SWIOTLB advise) vs transfer (post..CQE), avg ns.
+        APPEND_STAT("extstore_prof_read_crypto_avg_ns", "%llu",
+                (unsigned long long)st.prof_read_crypto_avg_ns);
+        APPEND_STAT("extstore_prof_write_crypto_avg_ns", "%llu",
+                (unsigned long long)st.prof_write_crypto_avg_ns);
+        // breakout: crypto, sync (SWIOTLB advise), transfer, avg ns.
         APPEND_STAT("extstore_prof_read_sync_avg_ns", "%llu", (unsigned long long)st.prof_read_sync_avg_ns);
         APPEND_STAT("extstore_prof_read_xfer_avg_ns", "%llu", (unsigned long long)st.prof_read_xfer_avg_ns);
         APPEND_STAT("extstore_prof_write_sync_avg_ns", "%llu", (unsigned long long)st.prof_write_sync_avg_ns);
@@ -210,7 +224,10 @@ static void _storage_get_item_cb(void *e, obj_io *io, int ret) {
         uint32_t hv = hash(ITEM_key(p->hdr_it), p->hdr_it->nkey);
         struct ext_aad aad = { .hv = hv, .page_id = io->page_id, .pad = 0,
             .offset = io->offset, .page_version = io->page_version };
-        if (ext_crypto_open(read_it, (uint8_t *)io->buf, io->len, &aad) < 0) {
+        uint64_t crypto_start = extstore_prof_stamp();
+        int opened = ext_crypto_open(read_it, (uint8_t *)io->buf, io->len, &aad);
+        extstore_prof_read_done(e, io, crypto_start, extstore_prof_stamp());
+        if (opened < 0) {
             // Retry a transient DMA visibility failure; never serve unverified data.
             if (io->retries++ < g_read_retries) {
                 atomic_fetch_add(&g_read_retry_ct, 1);
@@ -254,7 +271,9 @@ static void _storage_get_item_cb(void *e, obj_io *io, int ret) {
                 read_it->slabs_clsid = p->read_clsid;
         }
     } else {
+        uint64_t crypto_start = extstore_prof_stamp();
         memcpy(read_it, io->buf, io->len);   // crypto off: io->len == ntotal
+        extstore_prof_read_done(e, io, crypto_start, extstore_prof_stamp());
     }
 
     if (miss) {
@@ -338,12 +357,33 @@ int storage_get_item(LIBEVENT_THREAD *t, item *it, mc_resp *resp) {
     size_t ntotal = ITEM_ntotal(it);
     unsigned int clsid = slabs_clsid(ntotal);
     item *new_it;
+    cache_t *read_cache = NULL;
     if (ntotal > settings.slab_chunk_size_max) {
         // P-6: chunked items unsupported on the RDMA backend.
         atomic_fetch_add(&g_abort_chunked, 1);
         return -1;
     }
-    new_it = do_item_alloc_pull(ntotal, clsid);
+    if (ntotal <= g_plaintext_slot_size) {
+        if (g_plaintext_cache == NULL) {
+            g_plaintext_cache = cache_create("extstore-plaintext",
+                    g_plaintext_slot_size, sizeof(char *));
+            if (g_plaintext_cache != NULL)
+                cache_set_limit(g_plaintext_cache, PLAINTEXT_POOL_LIMIT);
+        }
+        if (g_plaintext_cache != NULL) {
+            new_it = do_cache_alloc(g_plaintext_cache);
+            if (new_it != NULL)
+                read_cache = g_plaintext_cache;
+        } else {
+            new_it = NULL;
+        }
+    } else {
+        new_it = NULL;
+    }
+    if (new_it == NULL) {
+        atomic_fetch_add(&g_plaintext_slab_fallback, 1);
+        new_it = do_item_alloc_pull(ntotal, clsid);
+    }
     if (new_it == NULL) {
         atomic_fetch_add(&g_abort_alloc, 1);
         return -1;
@@ -366,6 +406,7 @@ int storage_get_item(LIBEVENT_THREAD *t, item *it, mc_resp *resp) {
     p->hdr_it = it;
     p->read_it = new_it;
     p->read_clsid = clsid;
+    p->read_cache = read_cache;
     p->resp = resp;
     p->io_queue_type = IO_QUEUE_EXTSTORE;
     p->payload = offsetof(io_pending_storage_t, io_ctx);
@@ -436,9 +477,12 @@ static void storage_release_pending(io_pending_t *pending) {
     conn *c = p->c;
     item *it = p->read_it;   // the decrypt destination we allocated
     assert(c != NULL);
+    if (p->read_cache != NULL)
+        do_cache_free(p->read_cache, it);
+    else
+        slabs_free(it, p->read_clsid);
     if (p->active) {
         // If request never dispatched, free the read buffer, leave header alone.
-        slabs_free(it, p->read_clsid);
         p->resp->suspended = false;
         c->resps_suspended--;
         io_queue_t *q = thread_io_queue_get(p->thread, p->io_queue_type);
@@ -451,14 +495,11 @@ static void storage_release_pending(io_pending_t *pending) {
         // failure can recover on a later GET. No local value is available.
         if (!p->badcrc)
             item_unlink(p->hdr_it);
-        slabs_free(it, p->read_clsid);
         pthread_mutex_lock(&c->thread->stats.mutex);
         c->thread->stats.miss_from_extstore++;
         if (p->badcrc)
             c->thread->stats.badcrc_from_extstore++;
         pthread_mutex_unlock(&c->thread->stats.mutex);
-    } else {
-        slabs_free(it, p->read_clsid);
     }
 
     p->io_ctx.buf = NULL;
@@ -513,6 +554,7 @@ int storage_store_item(void *e, item *it, item **hdr_out, uint32_t hv) {
         return -1;
     }
 
+    uint64_t prof_start = extstore_prof_stamp();
     int sealed;
     if (g_crypto_on) {
         struct ext_aad aad = { .hv = hv, .page_id = loc.page_id, .pad = 0,
@@ -531,6 +573,7 @@ int storage_store_item(void *e, item *it, item **hdr_out, uint32_t hv) {
         memcpy(slot, it, ntotal);
         sealed = (int)ntotal;
     }
+    uint64_t prof_crypto_done = extstore_prof_stamp();
     if (sealed != (int)rlen) {
         extstore_staging_put(e, slot);
         extstore_free_loc(e, &loc);
@@ -554,6 +597,7 @@ int storage_store_item(void *e, item *it, item **hdr_out, uint32_t hv) {
         .page_version = loc.page_version, .len = rlen, .offset = loc.offset,
         .page_id = loc.page_id, .mode = OBJ_IO_WRITE,
         .cb = storage_store_done_cb,
+        .t_start = prof_start, .t_end = prof_crypto_done,
     };
     extstore_submit(e, &io);
 
@@ -635,6 +679,7 @@ void *storage_init_config(struct settings *s) {
     cf->ext_cf.page_buckets = PAGE_BUCKET_COUNT;
     char *v;
     cf->ext_cf.slot_size   = (v = getenv("EXT_SLOT_SIZE"))   ? atoi(v) : 2048;
+    g_plaintext_slot_size = cf->ext_cf.slot_size;
     cf->ext_cf.read_slots  = (v = getenv("EXT_READ_SLOTS"))  ? atoi(v) : 32;
     cf->ext_cf.write_slots = (v = getenv("EXT_WRITE_SLOTS")) ? atoi(v) : 256;
     if ((v = getenv("EXT_READ_RETRIES"))) g_read_retries = atoi(v);
