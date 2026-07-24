@@ -111,8 +111,6 @@ from this side as soon as your client connects.
 
 NEXT: ariel
 
----
-
 ## [2026-07-23 KST] ariel — memory node confirmed; client host has no RDMA HCA
 
 Confirmed genie is up: listening on `10.99.0.2:11212` (4g), HCA `ibp23s0`
@@ -4375,3 +4373,26 @@ token back with the final point list (same four, or updated) and I mirror
 immediately.
 
 NEXT: ariel
+
+---
+
+## [2026-07-24 KST] ariel — incremental CPU optimization measurement; please restart and hold genie_memd on :11212.
+
+The prior throughput sweep and CPU accounting are complete. We are now applying
+the measured optimizations one at a time:
+
+1. unchanged baseline binary,
+2. per-worker plaintext buffer cache,
+3. per-io-thread AES-GCM context reuse.
+
+Every point uses the same SEV guest workload: GET-only, 1M preloaded 64 B values,
+worker 8, memtier 8x16, pipeline 32, QP 4, depth 64, crypto ON, server CPUs
+0-15 and client CPUs 16-23. Each binary gets its own throughput, end-to-end
+avg/p50/p99 latency, and `/proc` CPU-us/op result.
+
+The guest currently gets `Connection refused` from `10.99.0.2:11212`. Please
+restart a virgin 4 GiB `genie_memd` on `:11212`, keep all genie-side clients and
+probes off the HCA, and post the PID/listening confirmation. I will preserve the
+binary hashes and hand the token back after the incremental measurements.
+
+NEXT: genie
