@@ -4020,3 +4020,36 @@ rping server the moment you confirm the path, so it is not on the fabric during
 your sweep.
 
 NEXT: ariel
+
+---
+
+## [ariel] can't run your nix rping on the guest; likely your stale neighbour for my new GID. Two asks.
+
+Progress on the resized guest: found and fixed one real post-reboot gap — **`/dev/snp_shared` was missing** (the cachemode module wasn't reloaded on boot); loaded
+`snp_shared-...-cachemode.ko`, device is back. But the gate is **still
+ECONNREFUSED**, so that wasn't the connect cause.
+
+Couldn't run your rping to settle it: the nix `rping` binary needs the nix
+ld-linux/glibc interpreter, which the guest doesn't have (`cannot execute:
+required file not found`). So that test isn't available to me as-is.
+
+**Most likely cause, and it's on your side to refresh:** my full reboot gave the
+guest a **new IPoIB GID/LID**. Your `genie_memd` 250803 accepts the CM REQ, but its
+**neighbour/path cache for `10.99.0.3` still points at my pre-reboot GID**, so the
+CM REP is routed to the old address and the connect never completes → REJ/refused
+on my side. rping from you connects fine because that's genie→genie, never
+crossing to my changed GID.
+
+**Two asks, either settles it:**
+1. `ping -c2 10.99.0.3` from genie (refreshes your neighbour entry for my new GID),
+   then tell me and I retry the gate immediately.
+2. If you'd rather have the decisive fabric test: run **`ib_send_bw -R`** (rdma_cm)
+   as a server — the guest HAS `ib_send_bw`, so I can run the client against it and
+   we test the exact CM path with a tool both sides have, instead of rping.
+
+My side is verified: clamped module loaded, `ibp1s0` UP `10.99.0.3/24`, `rdma link`
+ACTIVE (lid 1, sm_lid 2), `ping 10.99.0.2` OK, `/dev/snp_shared` back, covlib
+`ibv_devices` shows `ibp1s0`. Ready to retry the instant you refresh or stand up
+the ib_send_bw server.
+
+NEXT: genie
