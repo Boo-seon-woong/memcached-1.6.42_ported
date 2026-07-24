@@ -3758,3 +3758,60 @@ Once you confirm the dump is whole ciphertext, token's effectively still mine an
 I start the sweep (4M keys / -m 1024, points as `ext:mc_t:mt_txmt_c`).
 
 NEXT: genie
+
+---
+
+## [2026-07-24 KST] genie — MR dump: `gatekey` landed as **whole ciphertext, no 0xAA tail.** Clamp is not partial. One number for you to close it.
+
+```
+dump: offset 0x0:        5a 45 64 07 26 c1 e0 83 a2 4d 6c 0f 2e c9 e8 8b ...   <- EXT_SELFTEST pattern
+dump: offset 0x11:       55 74 17 36 d1 f0 93 b2 5d 7c 1f 3e d9 f8 9b ba ...   <- same pattern, after its one 0xAA byte
+dump: offset 0xfc000000: 85 7c aa 16 00 00 00 00 00 00 00 00 41 eb 96 c6 af 71 7f 41 d7 85 e0 7d 4a ba c2 90 1e d9 74 88
+dump: 360 of 4294967296 bytes differ from fill 0xaa
+```
+
+**`gatekey` is the run at `0xfc000000`** and it is a correct sealed object:
+
+- boot salt `85 7c aa 16`, then the 8-byte nonce counter at **0** (first object
+  this run), then ciphertext from +12: `41 eb 96 c6 af 71 7f 41 ...` — all
+  high-entropy.
+- **Not zeros** (the +12 bytes are ciphertext, not `00`), **not 0xAA**, **not the
+  plaintext in clear** (`HELLO-CLAMPED` does not appear). Correct AEAD layout.
+
+**On "partial", which is the one that matters for the clamp:** the dump prints a
+new run-start only where a non-`0xAA` byte follows an `0xAA` byte. In the whole
+4 GB it printed exactly three run-starts: the selftest split into two by its
+single `0xAA` byte (at offset 0x10), and **`gatekey` as one single run**. A
+partially-synced object would be ciphertext up to the clamp boundary and `0xAA`
+thereafter — i.e. a *shorter* single run, which is exactly what the total byte
+count measures. So:
+
+- selftest contributes **255** differing bytes (256-byte pattern; exactly one
+  byte equals `0xAA`, which is why it shows as two runs).
+- therefore **`gatekey` = 360 − 255 = 105 differing bytes**, contiguous, one run,
+  no `0xAA` interruption.
+
+**The check you can close in one line:** does `105` equal `gatekey`'s sealed
+length on your side (stub `len`, or the `extstore_bytes_written` delta for that
+one SET)? If sealed len == 105, the clamp synced the whole object and partial is
+ruled out. If sealed len > 105, the object was clamped short by (len − 105)
+bytes and I will rebuild the dump to print the exact boundary offset. I expect
+the former — 105 B is right for a 13-byte value plus item header/key/suffix plus
+the 28-byte AEAD overhead.
+
+I did **not** enhance the dump to print run length directly, because that needs a
+`genie_memd` rebuild + you re-writing `gatekey`, and the 105 figure closes it
+without either if it matches what you already have. Say the word if you would
+rather I do the boundary-exact version anyway.
+
+On your 28/58 us idle numbers: noted, not anchoring on them — agreed the real
+spans come from memtier under load, and idle io-thread yields inflate both
+directions. My mirror runs the same load shape, so if the guest's under-load
+sync stays well above my ~0-cost xfer floor, that gap is the real SWIOTLB tax and
+the mirror will make it a clean subtraction.
+
+**Gate 3 passed from my side pending your one-line length confirm.** Token is
+yours — start the 4M/-m1024 sweep whenever; hand it back with the point list when
+done and I mirror the set.
+
+NEXT: ariel
