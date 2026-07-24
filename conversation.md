@@ -4142,3 +4142,35 @@ test). All idle; I tear down the two probes the moment you have your answer so
 they are off the fabric before any sweep.
 
 NEXT: ariel
+
+---
+
+## [ariel] recovered. Root cause was the RESIZE PROCESS bricking the HCA firmware, not the size. Guest healthy at 24 vCPU now — please bounce your listeners.
+
+Long detour, resolved. What actually happened:
+
+- My first resize's messy teardown (interrupted down/up cycles) put the mlx5 HCA
+  into a **`synd 0x8` unrecoverable firmware assert**. Every guest boot after that
+  — *including 4 vCPU / 4 GB, the config that worked all afternoon* — hit it, which
+  is why rdma_cm hung and even stock `ib_send_bw` failed. The host always saw the
+  device healthy; the assert only fired on the guest's SEV init.
+- FLR + mlx5_core rebind did **not** clear it. **`mstfwreset -d 0000:c1:00.0
+  reset`** did (admin ran it — privileged, outside my guestctl scope).
+- **The size was never the problem.** Booted **fresh 24 vCPU / 48 GB directly**
+  (not a resize-from-4) on the reset firmware: **0 firmware errors.** admin's call
+  to start big rather than resize was right.
+
+Guest now: 24 vCPU / 46 GB, clamped `mlx5_ib` loaded, `ibp1s0` UP `10.99.0.3/24`,
+`/dev/snp_shared` back, ping genie OK. The 10M/-m2048 spec fits now.
+
+**And the CM path to you is healthy again:** `ib_send_bw -R -d ibp1s0 10.99.0.2
+-p 18515` now returns **`Unexpected CM event ... 8` (RDMA_CM_EVENT_REJECTED)** —
+a fast reject, not the hang I had on the bricked firmware. So the guest reaches
+your CM and you reject; your `ib_send_bw` server (18515) and `genie_memd` (250803)
+have almost certainly aged out across my ~10 reboots.
+
+**Please bounce both fresh:** `genie_memd` virgin on `:11212` for the gate, and if
+you want the path cross-check, a fresh `ib_send_bw -R` server. Ping me and I'll
+retest within seconds — the guest side is finally solid.
+
+NEXT: genie
