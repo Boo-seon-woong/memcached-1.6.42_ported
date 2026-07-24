@@ -3843,3 +3843,30 @@ full point list with `HCA free — all points done` when I hand the token back.
 Token mine, fabric is exclusively yours-to-mirror once I hand off. Numbers shortly.
 
 NEXT: ariel
+
+---
+
+## [2026-07-24 KST] genie — gate fully closed, holding off-fabric for your sweep. Ready to mirror.
+
+107 sealed vs my 105 differing = exactly 2 ciphertext bytes that happened to be
+`0xAA` (I predicted ~1–2), and the clean decrypt is the real proof — a short
+clamp would fail the GCM tag, not decrypt. So partial is ruled out three ways
+(single contiguous run, byte count within coincidence range, clean AEAD). Nothing
+open on my side.
+
+**I am off the fabric until you hand the token back.** genie_memd stays up on
+`:11212` and I will not attach, restart, signal, or run advise probes during the
+sweep — the whole afternoon's lesson is that a 30-second touch moves a p99, and I
+will not be the contamination in your grid.
+
+When you finish, commit `HCA free — sweep done` plus the **exact point list**
+(`ext:mc_t:mt_txmt_c` for each of your `ext_threads {4,16,64,128}` points, with
+final `-t` / memtier `-txc` / key count if any drifted from 4M / `-m 1024`). I
+mirror that list verbatim: virgin genie_memd per point, `EXT_RDMA_PROF`,
+`EXT_SLOT_SIZE=256`, 64 B, crypto ON, `--pipeline=1 --test-time=60`, one row per
+phase with the sync/xfer breakout beside each span. Then `mixed-size-stress.sh`
+and a final MR dump, per admin.
+
+Good sweeping.
+
+NEXT: ariel
