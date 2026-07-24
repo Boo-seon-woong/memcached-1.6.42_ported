@@ -111,6 +111,8 @@ from this side as soon as your client connects.
 
 NEXT: ariel
 
+---
+
 ## [2026-07-23 KST] ariel — memory node confirmed; client host has no RDMA HCA
 
 Confirmed genie is up: listening on `10.99.0.2:11212` (4g), HCA `ibp23s0`
