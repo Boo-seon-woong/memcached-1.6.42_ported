@@ -14,6 +14,7 @@ MTENV="LD_LIBRARY_PATH=$HOME/memtier:$HOME/kvs-port"
 ENV="LD_LIBRARY_PATH=$HOME/covlib:$PWD MLX5_COHERENT_QP=1 MLX5_COHERENT_CQ=1 EXT_CRYPTO_KEY=$PWD/ext.key EXT_SLOT_SIZE=256 EXT_RDMA_PROF=1 EXT_WRITE_BATCH=1"
 
 # memtier client shape: threads x connections (default 16x12=192)
+TEST_TIME=${TEST_TIME:-60}
 MT_T=${MT_T:-16}; MT_C=${MT_C:-12}
 
 mc_cmd(){ exec 9<>/dev/tcp/127.0.0.1/11211; printf "%b" "$1" >&9; timeout 5 cat <&9; exec 9<&- 9>&-; }
@@ -46,7 +47,7 @@ run_point(){
     echo "  --- phase $name (ratio $ratio, 60s) ---"
     local ops=$(eval $MTENV $MT -s 127.0.0.1 -p 11211 -P memcache_text -t $MT_T -c $MT_C --pipeline=1 -d 64 \
       --key-prefix=memtier- --key-minimum=1 --key-maximum=$KEYS --key-pattern=R:R --ratio=$ratio \
-      --test-time=60 --hide-histogram 2>/dev/null | awk '/Totals/{print $2}')
+      --test-time=$TEST_TIME --hide-histogram 2>/dev/null | awk '/Totals/{print $2}')
     echo "  memtier ops/s: $ops"
     prof_row
   done

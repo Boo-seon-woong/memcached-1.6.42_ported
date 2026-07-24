@@ -28,7 +28,7 @@
 
 /* EXT_RDMA_PROF (D6): runtime-gated in-server span profiling. EXT_WRITE_BATCH
  * caps the posting round so each SYNC advise is attributable to one op. */
-#define PROF_BUCKETS 8192        /* x100ns => 0..819us range, overflow clamps */
+#define PROF_BUCKETS 32768     /* x100ns => 0..3.27ms, captures the contention tail */
 #define PROF_BUCKET_NS 100
 static int g_prof_on = 0;
 static unsigned int g_batch_limit = 32;      /* posting-round cap (<= wrs[] size) */
@@ -134,7 +134,7 @@ typedef struct {
     /* EXT_RDMA_PROF: per-thread span histogram (lock-free; aggregated on read).
      * PROF_BUCKETS x PROF_BUCKET_NS covers 0..~102us; bucket = ns/100 clamped. */
     uint64_t prof_r_count, prof_w_count, prof_r_sum_ns, prof_w_sum_ns;
-    uint32_t prof_r_hist[8192], prof_w_hist[8192];
+    uint32_t prof_r_hist[32768], prof_w_hist[32768];
     /* admin's breakout: sync (advise) vs transfer (post..CQE) portion, ns sums. */
     uint64_t prof_r_sync_ns, prof_r_xfer_ns, prof_w_sync_ns, prof_w_xfer_ns;
 } store_iothr;
