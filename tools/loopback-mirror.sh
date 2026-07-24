@@ -51,10 +51,14 @@ start_client() {     # $1 ext_threads  $2 memcached worker threads
 }
 
 row() {              # $1 point  $2 phase  $3 ops/s
-  printf "%-16s %-8s  R %8s/%8s/%8s ns   W %8s/%8s/%8s ns   %10s ops/s\n" \
-    "$1" "$2" "$(stat extstore_prof_read_avg_ns)" "$(stat extstore_prof_read_p50_ns)" \
-    "$(stat extstore_prof_read_p99_ns)" "$(stat extstore_prof_write_avg_ns)" \
-    "$(stat extstore_prof_write_p50_ns)" "$(stat extstore_prof_write_p99_ns)" "$3"
+  # R/W avg = p50 = p99 span, then the sync|xfer breakout admin asked for
+  printf "%-16s %-6s R %7s/%7s/%7s (sync %6s xfer %6s)  W %7s/%7s/%7s (sync %6s xfer %6s)  %9s ops/s\n" \
+    "$1" "$2" \
+    "$(stat extstore_prof_read_avg_ns)"  "$(stat extstore_prof_read_p50_ns)"  "$(stat extstore_prof_read_p99_ns)" \
+    "$(stat extstore_prof_read_sync_avg_ns)"  "$(stat extstore_prof_read_xfer_avg_ns)" \
+    "$(stat extstore_prof_write_avg_ns)" "$(stat extstore_prof_write_p50_ns)" "$(stat extstore_prof_write_p99_ns)" \
+    "$(stat extstore_prof_write_sync_avg_ns)" "$(stat extstore_prof_write_xfer_avg_ns)" \
+    "$3"
 }
 
 run_phase() {        # $1 point  $2 label  $3 ratio  $4 mt_threads  $5 mt_conns

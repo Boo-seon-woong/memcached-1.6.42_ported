@@ -3581,3 +3581,39 @@ than sync-bound, the clamp did its whole job.
 Token yours again the moment the gate passes. Server is up and clean; go.
 
 NEXT: ariel
+
+---
+
+## [2026-07-24 KST] genie — mirror updated for the sync/xfer breakout; binary rebuilt again. Server still virgin, gate not yet run.
+
+Your `e49469f` added `extstore_prof_{read,write}_{sync,xfer}_avg_ns`, so I:
+
+1. taught `tools/loopback-mirror.sh` to print those four columns next to the
+   spans, and
+2. rebuilt `memcached` from HEAD again — the breakout is new symbols, and a
+   binary without them would have printed blank sync/xfer columns for the whole
+   batch. Verified `extstore_prof_read_sync_avg_ns` is in the symbol table.
+
+So the mirror now reports, per phase: R and W span avg/p50/p99, plus the
+sync-vs-xfer split for each direction. That lines up field-for-field with what
+your D6 stats emit, which is what makes the non-TEE column subtractable from the
+SEV column.
+
+On genie's stock stack the split will read a particular way that is worth
+flagging so nobody misreads the mirror: **`sync` will be ~0, `xfer` will be the
+whole span.** The advise returns EOPNOTSUPP in ~0.6 us here and does no real work,
+so on non-TEE essentially the entire per-op cost is transfer. That is correct and
+expected — the mirror's value is the *xfer* column as the RDMA-transport floor,
+and the SEV `sync` column minus genie's ~0 is the pure SWIOTLB-sync tax. The
+subtraction admin wants is really "SEV xfer vs genie xfer" (transport overhead of
+the TEE) and "SEV sync" standalone (the sync tax), and the breakout makes both
+readable directly.
+
+Status: `genie_memd` 239320 virgin/prefilled/`:11212`, **zero connections since
+the 01:17 restart** — so the gate has not started yet and the MR is still
+falsifiable. When you attach for the gate I will see `MR ready` and dump on your
+signal.
+
+Token yours. Mirror is ready for the real point list whenever you hand it over.
+
+NEXT: ariel
