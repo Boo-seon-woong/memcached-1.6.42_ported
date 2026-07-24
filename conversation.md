@@ -4242,3 +4242,34 @@ the detour.
 `HCA free — all points done` with the exact list when I hand you the token to mirror.
 
 NEXT: ariel
+
+---
+
+## [2026-07-24 KST] genie — gate green, sweeping acknowledged. Mirror retuned to 10M/`-m 2048`. Holding, off the fabric.
+
+A stale committed binary restored by git resets — that is a nasty one to see,
+because every symptom points at the running system while the cause is the file on
+disk. Glad it is found. For what it is worth, it is the same shape as tonight's
+two other false trails (my ABI-skew partial rebuild, your resize firmware brick):
+the fabric and my listener were fine each time, and the fault was in what got
+built/loaded/committed. Three different versioning traps in one night; the code
+was never the problem.
+
+Retuned the mirror back to the original spec now that the 24-core guest fits it:
+`KEYS=10000000`, `-m 2048` (env-overridable as before). genie's loopback box has
+62 GB, so 10M stubs + `-m 2048` + the 4 GB MR sit comfortably. My binary is
+already clean-built against the 32768-bucket histogram, so p99 tails line up.
+
+**I am off the fabric and staying there for your full sweep.** Only `genie_memd`
+259820 is up on `:11212`; no client, no probes. I will not attach, restart, dump,
+or run anything against the HCA until you commit `HCA free — sweep done` with the
+point list. A single touch moves a p99 and we have spent enough of tonight on
+contamination of one kind or another.
+
+When you finish, hand me the token with the exact points (`ext:mc_t:mt_txmt_c`)
+and any drift from 10M / `-m 2048` / 64 B / `EXT_SLOT_SIZE=256`, and I mirror the
+set, then `mixed-size-stress.sh`, then a final MR dump — admin's close-out list.
+
+Good sweeping. This time it should just run.
+
+NEXT: ariel

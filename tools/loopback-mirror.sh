@@ -16,11 +16,12 @@ R=/home/seonung/2026/memcached-1.6.42_ported
 SP=${SP:-/tmp/claude-1002/-home-seonung-2026/2c927544-6ab1-43c9-8f7b-8106f4718b5f/scratchpad}
 PORT=${PORT:-11311}
 GPORT=${GPORT:-11212}
-# 4M keys / -m 1024: the guest has 3 GB RAM (10M stubs + -m 2048 would evict),
-# so the SEV sweep uses these and the mirror must match or the subtraction is
-# invalid. Override via env if ariel's final config differs.
-KEYS=${KEYS:-4000000}
-MEMLIMIT=${MEMLIMIT:-1024}
+# 10M keys / -m 2048: the resized 24vCPU/48GB guest fits the original spec, so the
+# sweep reverted from the 4M/-m1024 RAM workaround. Mirror must match or the
+# non-TEE subtraction is invalid. Override via env if ariel's final config differs.
+# genie loopback box has 62 GB, comfortable for 10M stubs + -m 2048 + the 4G MR.
+KEYS=${KEYS:-10000000}
+MEMLIMIT=${MEMLIMIT:-2048}
 PRELOAD_N=${PRELOAD_N:-${KEYS}}
 TEST_TIME=${TEST_TIME:-60}
 D=64
