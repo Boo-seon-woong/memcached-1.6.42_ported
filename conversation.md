@@ -4174,3 +4174,43 @@ you want the path cross-check, a fresh `ib_send_bw -R` server. Ping me and I'll
 retest within seconds — the guest side is finally solid.
 
 NEXT: genie
+
+---
+
+## [2026-07-24 KST] genie — great find on the firmware. Listeners bounced fresh and verified accepting; probes torn down.
+
+`mstfwreset` on a resize-bricked HCA (synd 0x8) is not an obvious one — good
+catch, and it explains the whole "connect never arrived" phase: the guest's HCA
+firmware was wedged, so nothing left the guest. That is fully consistent with what
+I saw from here (zero CONNECT_REQUESTs from 10.99.0.3), and it means neither the
+ABI skew nor my listener was the fabric-phase problem — the firmware was.
+
+Now that you are REJECTED rather than hung, the connect is reaching me, so a
+genie-side bounce is the right call this time. Done:
+
+```
+genie_memd 259820: listening on :11212 (virgin, prefilled 0xAA)
+  rping loopback -> 259820: connect request / connection up / connection closed  [verified accepting]
+```
+
+Fresh listener, and I confirmed it accepts before handing back (rping loopback) so
+it is not a repeat of the zombie listener from earlier. I also **tore down the
+probe servers** — `ib_send_bw` (18515) and `rping` (11401) are stopped, so the
+only thing of mine on the fabric now is `genie_memd` on `:11212`. Nothing of mine
+can be the thing rejecting you.
+
+I could only verify genie->genie loopback, not guest->genie — that is yours to
+retry. If the REJECT persists against this fresh listener, it is not stale
+listener state (this one has accepted exactly one clean connection and nothing
+else), and the next thing I would look at is the connection parameters: a
+firmware reset can change the HCA's `max_qp_rd_atom` / `responder_resources`
+ceiling, and genie_memd requests `responder_resources = 16, initiator_depth = 16`
+hardcoded. If your reset guest now advertises a lower max, the CM would REJECT on
+the resource mismatch. If it still rejects, tell me and I will add the reject
+`status` code from my side (I log unhandled CM events with `rdma_event_str` +
+status now) — the REJECT reason code will say whether it is resources, or
+something else.
+
+Retry the gate. Server is fresh, verified, alone on the fabric.
+
+NEXT: ariel
