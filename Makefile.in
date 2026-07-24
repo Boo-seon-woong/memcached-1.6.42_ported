@@ -117,8 +117,7 @@ noinst_PROGRAMS = memcached-debug$(EXEEXT) sizes$(EXEEXT) \
 
 @ENABLE_EXTSTORE_TRUE@am__append_8 = extstore.c extstore.h \
 @ENABLE_EXTSTORE_TRUE@                     crc32c.c crc32c.h \
-@ENABLE_EXTSTORE_TRUE@                     storage.c storage.h \
-@ENABLE_EXTSTORE_TRUE@                     slab_automove_extstore.c slab_automove_extstore.h
+@ENABLE_EXTSTORE_TRUE@                     storage.c storage.h
 
 @ENABLE_TLS_TRUE@am__append_9 = tls.c tls.h
 @BUILD_LINUX_PRIVS_TRUE@am__append_10 = -lseccomp
@@ -171,8 +170,7 @@ am__memcached_SOURCES_DIST = memcached.c memcached.h hash.c hash.h \
 	proxy_mutator.c proxy_network.c proxy_lua.c proxy_luafgen.c \
 	proxy_config.c proxy_ring_hash.c proxy_internal.c proxy_tls.c \
 	proxy_tls.h md5.c md5.h vendor/routelib/routelib.h extstore.c \
-	extstore.h crc32c.c crc32c.h storage.c storage.h \
-	slab_automove_extstore.c slab_automove_extstore.h tls.c tls.h
+	extstore.h crc32c.c crc32c.h storage.c storage.h tls.c tls.h
 @BUILD_SOLARIS_PRIVS_TRUE@am__objects_1 =  \
 @BUILD_SOLARIS_PRIVS_TRUE@	memcached-solaris_priv.$(OBJEXT)
 @BUILD_LINUX_PRIVS_TRUE@am__objects_2 =  \
@@ -203,8 +201,7 @@ am__memcached_SOURCES_DIST = memcached.c memcached.h hash.c hash.h \
 @ENABLE_PROXY_TRUE@	memcached-md5.$(OBJEXT)
 @ENABLE_EXTSTORE_TRUE@am__objects_8 = memcached-extstore.$(OBJEXT) \
 @ENABLE_EXTSTORE_TRUE@	memcached-crc32c.$(OBJEXT) \
-@ENABLE_EXTSTORE_TRUE@	memcached-storage.$(OBJEXT) \
-@ENABLE_EXTSTORE_TRUE@	memcached-slab_automove_extstore.$(OBJEXT)
+@ENABLE_EXTSTORE_TRUE@	memcached-storage.$(OBJEXT)
 @ENABLE_TLS_TRUE@am__objects_9 = memcached-tls.$(OBJEXT)
 am_memcached_OBJECTS = memcached-memcached.$(OBJEXT) \
 	memcached-hash.$(OBJEXT) memcached-jenkins_hash.$(OBJEXT) \
@@ -246,8 +243,7 @@ am__memcached_debug_SOURCES_DIST = memcached.c memcached.h hash.c \
 	proxy_luafgen.c proxy_config.c proxy_ring_hash.c \
 	proxy_internal.c proxy_tls.c proxy_tls.h md5.c md5.h \
 	vendor/routelib/routelib.h extstore.c extstore.h crc32c.c \
-	crc32c.h storage.c storage.h slab_automove_extstore.c \
-	slab_automove_extstore.h tls.c tls.h
+	crc32c.h storage.c storage.h tls.c tls.h
 @BUILD_SOLARIS_PRIVS_TRUE@am__objects_10 = memcached_debug-solaris_priv.$(OBJEXT)
 @BUILD_LINUX_PRIVS_TRUE@am__objects_11 =  \
 @BUILD_LINUX_PRIVS_TRUE@	memcached_debug-linux_priv.$(OBJEXT)
@@ -277,8 +273,7 @@ am__memcached_debug_SOURCES_DIST = memcached.c memcached.h hash.c \
 @ENABLE_EXTSTORE_TRUE@am__objects_17 =  \
 @ENABLE_EXTSTORE_TRUE@	memcached_debug-extstore.$(OBJEXT) \
 @ENABLE_EXTSTORE_TRUE@	memcached_debug-crc32c.$(OBJEXT) \
-@ENABLE_EXTSTORE_TRUE@	memcached_debug-storage.$(OBJEXT) \
-@ENABLE_EXTSTORE_TRUE@	memcached_debug-slab_automove_extstore.$(OBJEXT)
+@ENABLE_EXTSTORE_TRUE@	memcached_debug-storage.$(OBJEXT)
 @ENABLE_TLS_TRUE@am__objects_18 = memcached_debug-tls.$(OBJEXT)
 am__objects_19 = memcached_debug-memcached.$(OBJEXT) \
 	memcached_debug-hash.$(OBJEXT) \
@@ -380,7 +375,6 @@ am__depfiles_remade = ./$(DEPDIR)/cache.Po ./$(DEPDIR)/crc32c.Po \
 	./$(DEPDIR)/memcached-restart.Po \
 	./$(DEPDIR)/memcached-sasl_defs.Po \
 	./$(DEPDIR)/memcached-slab_automove.Po \
-	./$(DEPDIR)/memcached-slab_automove_extstore.Po \
 	./$(DEPDIR)/memcached-slabs.Po \
 	./$(DEPDIR)/memcached-slabs_mover.Po \
 	./$(DEPDIR)/memcached-solaris_priv.Po \
@@ -432,7 +426,6 @@ am__depfiles_remade = ./$(DEPDIR)/cache.Po ./$(DEPDIR)/crc32c.Po \
 	./$(DEPDIR)/memcached_debug-restart.Po \
 	./$(DEPDIR)/memcached_debug-sasl_defs.Po \
 	./$(DEPDIR)/memcached_debug-slab_automove.Po \
-	./$(DEPDIR)/memcached_debug-slab_automove_extstore.Po \
 	./$(DEPDIR)/memcached_debug-slabs.Po \
 	./$(DEPDIR)/memcached_debug-slabs_mover.Po \
 	./$(DEPDIR)/memcached_debug-solaris_priv.Po \
@@ -714,10 +707,10 @@ memcached_SOURCES = memcached.c memcached.h hash.c hash.h \
 	$(am__append_8) $(am__append_9)
 memcached_debug_SOURCES = $(memcached_SOURCES)
 memcached_CPPFLAGS = -DNDEBUG
-memcached_debug_LDADD = @PROFILER_LDFLAGS@ $(am__append_11) \
+memcached_debug_LDADD = @PROFILER_LDFLAGS@ -lrdmacm -libverbs -lcrypto $(am__append_11) \
 	$(am__append_16) $(am__append_20) $(am__append_24)
 memcached_debug_CFLAGS = @PROFILER_FLAGS@ -DMEMCACHED_DEBUG
-memcached_LDADD = $(am__append_10) $(am__append_14) $(am__append_19) \
+memcached_LDADD = -lrdmacm -libverbs -lcrypto $(am__append_10) $(am__append_14) $(am__append_19) \
 	$(am__append_23)
 memcached_LDFLAGS = $(am__append_21)
 memcached_debug_LDFLAGS = $(am__append_22)
@@ -906,7 +899,6 @@ distclean-compile:
 @AMDEP_TRUE@@am__include@ @am__quote@./$(DEPDIR)/memcached-restart.Po@am__quote@ # am--include-marker
 @AMDEP_TRUE@@am__include@ @am__quote@./$(DEPDIR)/memcached-sasl_defs.Po@am__quote@ # am--include-marker
 @AMDEP_TRUE@@am__include@ @am__quote@./$(DEPDIR)/memcached-slab_automove.Po@am__quote@ # am--include-marker
-@AMDEP_TRUE@@am__include@ @am__quote@./$(DEPDIR)/memcached-slab_automove_extstore.Po@am__quote@ # am--include-marker
 @AMDEP_TRUE@@am__include@ @am__quote@./$(DEPDIR)/memcached-slabs.Po@am__quote@ # am--include-marker
 @AMDEP_TRUE@@am__include@ @am__quote@./$(DEPDIR)/memcached-slabs_mover.Po@am__quote@ # am--include-marker
 @AMDEP_TRUE@@am__include@ @am__quote@./$(DEPDIR)/memcached-solaris_priv.Po@am__quote@ # am--include-marker
@@ -959,7 +951,6 @@ distclean-compile:
 @AMDEP_TRUE@@am__include@ @am__quote@./$(DEPDIR)/memcached_debug-restart.Po@am__quote@ # am--include-marker
 @AMDEP_TRUE@@am__include@ @am__quote@./$(DEPDIR)/memcached_debug-sasl_defs.Po@am__quote@ # am--include-marker
 @AMDEP_TRUE@@am__include@ @am__quote@./$(DEPDIR)/memcached_debug-slab_automove.Po@am__quote@ # am--include-marker
-@AMDEP_TRUE@@am__include@ @am__quote@./$(DEPDIR)/memcached_debug-slab_automove_extstore.Po@am__quote@ # am--include-marker
 @AMDEP_TRUE@@am__include@ @am__quote@./$(DEPDIR)/memcached_debug-slabs.Po@am__quote@ # am--include-marker
 @AMDEP_TRUE@@am__include@ @am__quote@./$(DEPDIR)/memcached_debug-slabs_mover.Po@am__quote@ # am--include-marker
 @AMDEP_TRUE@@am__include@ @am__quote@./$(DEPDIR)/memcached_debug-solaris_priv.Po@am__quote@ # am--include-marker
@@ -1709,20 +1700,6 @@ memcached-storage.obj: storage.c
 @AMDEP_TRUE@@am__fastdepCC_FALSE@	DEPDIR=$(DEPDIR) $(CCDEPMODE) $(depcomp) @AMDEPBACKSLASH@
 @am__fastdepCC_FALSE@	$(AM_V_CC@am__nodep@)$(CC) $(DEFS) $(DEFAULT_INCLUDES) $(INCLUDES) $(memcached_CPPFLAGS) $(CPPFLAGS) $(AM_CFLAGS) $(CFLAGS) -c -o memcached-storage.obj `if test -f 'storage.c'; then $(CYGPATH_W) 'storage.c'; else $(CYGPATH_W) '$(srcdir)/storage.c'; fi`
 
-memcached-slab_automove_extstore.o: slab_automove_extstore.c
-@am__fastdepCC_TRUE@	$(AM_V_CC)$(CC) $(DEFS) $(DEFAULT_INCLUDES) $(INCLUDES) $(memcached_CPPFLAGS) $(CPPFLAGS) $(AM_CFLAGS) $(CFLAGS) -MT memcached-slab_automove_extstore.o -MD -MP -MF $(DEPDIR)/memcached-slab_automove_extstore.Tpo -c -o memcached-slab_automove_extstore.o `test -f 'slab_automove_extstore.c' || echo '$(srcdir)/'`slab_automove_extstore.c
-@am__fastdepCC_TRUE@	$(AM_V_at)$(am__mv) $(DEPDIR)/memcached-slab_automove_extstore.Tpo $(DEPDIR)/memcached-slab_automove_extstore.Po
-@AMDEP_TRUE@@am__fastdepCC_FALSE@	$(AM_V_CC)source='slab_automove_extstore.c' object='memcached-slab_automove_extstore.o' libtool=no @AMDEPBACKSLASH@
-@AMDEP_TRUE@@am__fastdepCC_FALSE@	DEPDIR=$(DEPDIR) $(CCDEPMODE) $(depcomp) @AMDEPBACKSLASH@
-@am__fastdepCC_FALSE@	$(AM_V_CC@am__nodep@)$(CC) $(DEFS) $(DEFAULT_INCLUDES) $(INCLUDES) $(memcached_CPPFLAGS) $(CPPFLAGS) $(AM_CFLAGS) $(CFLAGS) -c -o memcached-slab_automove_extstore.o `test -f 'slab_automove_extstore.c' || echo '$(srcdir)/'`slab_automove_extstore.c
-
-memcached-slab_automove_extstore.obj: slab_automove_extstore.c
-@am__fastdepCC_TRUE@	$(AM_V_CC)$(CC) $(DEFS) $(DEFAULT_INCLUDES) $(INCLUDES) $(memcached_CPPFLAGS) $(CPPFLAGS) $(AM_CFLAGS) $(CFLAGS) -MT memcached-slab_automove_extstore.obj -MD -MP -MF $(DEPDIR)/memcached-slab_automove_extstore.Tpo -c -o memcached-slab_automove_extstore.obj `if test -f 'slab_automove_extstore.c'; then $(CYGPATH_W) 'slab_automove_extstore.c'; else $(CYGPATH_W) '$(srcdir)/slab_automove_extstore.c'; fi`
-@am__fastdepCC_TRUE@	$(AM_V_at)$(am__mv) $(DEPDIR)/memcached-slab_automove_extstore.Tpo $(DEPDIR)/memcached-slab_automove_extstore.Po
-@AMDEP_TRUE@@am__fastdepCC_FALSE@	$(AM_V_CC)source='slab_automove_extstore.c' object='memcached-slab_automove_extstore.obj' libtool=no @AMDEPBACKSLASH@
-@AMDEP_TRUE@@am__fastdepCC_FALSE@	DEPDIR=$(DEPDIR) $(CCDEPMODE) $(depcomp) @AMDEPBACKSLASH@
-@am__fastdepCC_FALSE@	$(AM_V_CC@am__nodep@)$(CC) $(DEFS) $(DEFAULT_INCLUDES) $(INCLUDES) $(memcached_CPPFLAGS) $(CPPFLAGS) $(AM_CFLAGS) $(CFLAGS) -c -o memcached-slab_automove_extstore.obj `if test -f 'slab_automove_extstore.c'; then $(CYGPATH_W) 'slab_automove_extstore.c'; else $(CYGPATH_W) '$(srcdir)/slab_automove_extstore.c'; fi`
-
 memcached-tls.o: tls.c
 @am__fastdepCC_TRUE@	$(AM_V_CC)$(CC) $(DEFS) $(DEFAULT_INCLUDES) $(INCLUDES) $(memcached_CPPFLAGS) $(CPPFLAGS) $(AM_CFLAGS) $(CFLAGS) -MT memcached-tls.o -MD -MP -MF $(DEPDIR)/memcached-tls.Tpo -c -o memcached-tls.o `test -f 'tls.c' || echo '$(srcdir)/'`tls.c
 @am__fastdepCC_TRUE@	$(AM_V_at)$(am__mv) $(DEPDIR)/memcached-tls.Tpo $(DEPDIR)/memcached-tls.Po
@@ -2451,20 +2428,6 @@ memcached_debug-storage.obj: storage.c
 @AMDEP_TRUE@@am__fastdepCC_FALSE@	DEPDIR=$(DEPDIR) $(CCDEPMODE) $(depcomp) @AMDEPBACKSLASH@
 @am__fastdepCC_FALSE@	$(AM_V_CC@am__nodep@)$(CC) $(DEFS) $(DEFAULT_INCLUDES) $(INCLUDES) $(AM_CPPFLAGS) $(CPPFLAGS) $(memcached_debug_CFLAGS) $(CFLAGS) -c -o memcached_debug-storage.obj `if test -f 'storage.c'; then $(CYGPATH_W) 'storage.c'; else $(CYGPATH_W) '$(srcdir)/storage.c'; fi`
 
-memcached_debug-slab_automove_extstore.o: slab_automove_extstore.c
-@am__fastdepCC_TRUE@	$(AM_V_CC)$(CC) $(DEFS) $(DEFAULT_INCLUDES) $(INCLUDES) $(AM_CPPFLAGS) $(CPPFLAGS) $(memcached_debug_CFLAGS) $(CFLAGS) -MT memcached_debug-slab_automove_extstore.o -MD -MP -MF $(DEPDIR)/memcached_debug-slab_automove_extstore.Tpo -c -o memcached_debug-slab_automove_extstore.o `test -f 'slab_automove_extstore.c' || echo '$(srcdir)/'`slab_automove_extstore.c
-@am__fastdepCC_TRUE@	$(AM_V_at)$(am__mv) $(DEPDIR)/memcached_debug-slab_automove_extstore.Tpo $(DEPDIR)/memcached_debug-slab_automove_extstore.Po
-@AMDEP_TRUE@@am__fastdepCC_FALSE@	$(AM_V_CC)source='slab_automove_extstore.c' object='memcached_debug-slab_automove_extstore.o' libtool=no @AMDEPBACKSLASH@
-@AMDEP_TRUE@@am__fastdepCC_FALSE@	DEPDIR=$(DEPDIR) $(CCDEPMODE) $(depcomp) @AMDEPBACKSLASH@
-@am__fastdepCC_FALSE@	$(AM_V_CC@am__nodep@)$(CC) $(DEFS) $(DEFAULT_INCLUDES) $(INCLUDES) $(AM_CPPFLAGS) $(CPPFLAGS) $(memcached_debug_CFLAGS) $(CFLAGS) -c -o memcached_debug-slab_automove_extstore.o `test -f 'slab_automove_extstore.c' || echo '$(srcdir)/'`slab_automove_extstore.c
-
-memcached_debug-slab_automove_extstore.obj: slab_automove_extstore.c
-@am__fastdepCC_TRUE@	$(AM_V_CC)$(CC) $(DEFS) $(DEFAULT_INCLUDES) $(INCLUDES) $(AM_CPPFLAGS) $(CPPFLAGS) $(memcached_debug_CFLAGS) $(CFLAGS) -MT memcached_debug-slab_automove_extstore.obj -MD -MP -MF $(DEPDIR)/memcached_debug-slab_automove_extstore.Tpo -c -o memcached_debug-slab_automove_extstore.obj `if test -f 'slab_automove_extstore.c'; then $(CYGPATH_W) 'slab_automove_extstore.c'; else $(CYGPATH_W) '$(srcdir)/slab_automove_extstore.c'; fi`
-@am__fastdepCC_TRUE@	$(AM_V_at)$(am__mv) $(DEPDIR)/memcached_debug-slab_automove_extstore.Tpo $(DEPDIR)/memcached_debug-slab_automove_extstore.Po
-@AMDEP_TRUE@@am__fastdepCC_FALSE@	$(AM_V_CC)source='slab_automove_extstore.c' object='memcached_debug-slab_automove_extstore.obj' libtool=no @AMDEPBACKSLASH@
-@AMDEP_TRUE@@am__fastdepCC_FALSE@	DEPDIR=$(DEPDIR) $(CCDEPMODE) $(depcomp) @AMDEPBACKSLASH@
-@am__fastdepCC_FALSE@	$(AM_V_CC@am__nodep@)$(CC) $(DEFS) $(DEFAULT_INCLUDES) $(INCLUDES) $(AM_CPPFLAGS) $(CPPFLAGS) $(memcached_debug_CFLAGS) $(CFLAGS) -c -o memcached_debug-slab_automove_extstore.obj `if test -f 'slab_automove_extstore.c'; then $(CYGPATH_W) 'slab_automove_extstore.c'; else $(CYGPATH_W) '$(srcdir)/slab_automove_extstore.c'; fi`
-
 memcached_debug-tls.o: tls.c
 @am__fastdepCC_TRUE@	$(AM_V_CC)$(CC) $(DEFS) $(DEFAULT_INCLUDES) $(INCLUDES) $(AM_CPPFLAGS) $(CPPFLAGS) $(memcached_debug_CFLAGS) $(CFLAGS) -MT memcached_debug-tls.o -MD -MP -MF $(DEPDIR)/memcached_debug-tls.Tpo -c -o memcached_debug-tls.o `test -f 'tls.c' || echo '$(srcdir)/'`tls.c
 @am__fastdepCC_TRUE@	$(AM_V_at)$(am__mv) $(DEPDIR)/memcached_debug-tls.Tpo $(DEPDIR)/memcached_debug-tls.Po
@@ -2903,7 +2866,6 @@ distclean: distclean-recursive
 	-rm -f ./$(DEPDIR)/memcached-restart.Po
 	-rm -f ./$(DEPDIR)/memcached-sasl_defs.Po
 	-rm -f ./$(DEPDIR)/memcached-slab_automove.Po
-	-rm -f ./$(DEPDIR)/memcached-slab_automove_extstore.Po
 	-rm -f ./$(DEPDIR)/memcached-slabs.Po
 	-rm -f ./$(DEPDIR)/memcached-slabs_mover.Po
 	-rm -f ./$(DEPDIR)/memcached-solaris_priv.Po
@@ -2956,7 +2918,6 @@ distclean: distclean-recursive
 	-rm -f ./$(DEPDIR)/memcached_debug-restart.Po
 	-rm -f ./$(DEPDIR)/memcached_debug-sasl_defs.Po
 	-rm -f ./$(DEPDIR)/memcached_debug-slab_automove.Po
-	-rm -f ./$(DEPDIR)/memcached_debug-slab_automove_extstore.Po
 	-rm -f ./$(DEPDIR)/memcached_debug-slabs.Po
 	-rm -f ./$(DEPDIR)/memcached_debug-slabs_mover.Po
 	-rm -f ./$(DEPDIR)/memcached_debug-solaris_priv.Po
@@ -3065,7 +3026,6 @@ maintainer-clean: maintainer-clean-recursive
 	-rm -f ./$(DEPDIR)/memcached-restart.Po
 	-rm -f ./$(DEPDIR)/memcached-sasl_defs.Po
 	-rm -f ./$(DEPDIR)/memcached-slab_automove.Po
-	-rm -f ./$(DEPDIR)/memcached-slab_automove_extstore.Po
 	-rm -f ./$(DEPDIR)/memcached-slabs.Po
 	-rm -f ./$(DEPDIR)/memcached-slabs_mover.Po
 	-rm -f ./$(DEPDIR)/memcached-solaris_priv.Po
@@ -3118,7 +3078,6 @@ maintainer-clean: maintainer-clean-recursive
 	-rm -f ./$(DEPDIR)/memcached_debug-restart.Po
 	-rm -f ./$(DEPDIR)/memcached_debug-sasl_defs.Po
 	-rm -f ./$(DEPDIR)/memcached_debug-slab_automove.Po
-	-rm -f ./$(DEPDIR)/memcached_debug-slab_automove_extstore.Po
 	-rm -f ./$(DEPDIR)/memcached_debug-slabs.Po
 	-rm -f ./$(DEPDIR)/memcached_debug-slabs_mover.Po
 	-rm -f ./$(DEPDIR)/memcached_debug-solaris_priv.Po

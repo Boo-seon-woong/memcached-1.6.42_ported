@@ -80,8 +80,7 @@ endif
 if ENABLE_EXTSTORE
 memcached_SOURCES += extstore.c extstore.h \
                      crc32c.c crc32c.h \
-                     storage.c storage.h \
-                     slab_automove_extstore.c slab_automove_extstore.h
+                     storage.c storage.h
 endif
 
 if ENABLE_TLS

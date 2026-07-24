@@ -350,7 +350,6 @@ struct slab_stats {
     X(get_extstore) \
     X(get_aborted_extstore) \
     X(get_oom_extstore) \
-    X(recache_from_extstore) \
     X(miss_from_extstore) \
     X(badcrc_from_extstore)
 #endif
@@ -408,13 +407,6 @@ struct stats {
     uint64_t      log_worker_written; /* logs written by worker threads */
     uint64_t      log_watcher_skipped; /* logs watchers missed */
     uint64_t      log_watcher_sent; /* logs sent to watcher buffers */
-#ifdef EXTSTORE
-    uint64_t      extstore_compact_lost; /* items lost because they were locked */
-    uint64_t      extstore_compact_rescues; /* items re-written during compaction */
-    uint64_t      extstore_compact_skipped; /* unhit items skipped during compaction */
-    uint64_t      extstore_compact_resc_cold; /* items re-written during compaction */
-    uint64_t      extstore_compact_resc_old; /* items re-written during compaction */
-#endif
 #ifdef TLS
     uint64_t      ssl_proto_errors; /* TLS failures during SSL_read() and SSL_write() calls */
     uint64_t      ssl_handshake_errors; /* TLS failures at accept/handshake time */
@@ -434,7 +426,6 @@ struct stats_state {
     uint64_t      curr_bytes;
     uint64_t      curr_conns;
     uint64_t      hash_bytes;       /* size used for hash tables */
-    float         extstore_memory_pressure; /* when extstore might memory evict */
     unsigned int  conn_structs;
     unsigned int  reserved_fds;
     unsigned int  hash_power_level; /* Better hope it's not over 9000 */
@@ -488,7 +479,6 @@ struct settings {
     int slab_automove;     /* Whether or not to automatically move slabs */
     unsigned int slab_automove_version; /* bump if AM config args change */
     double slab_automove_ratio; /* youngest must be within pct of oldest */
-    double slab_automove_freeratio; /* % of memory to hold free as buffer */
     unsigned int slab_automove_window; /* window mover for algorithm */
     int hashpower_init;     /* Starting hash power level */
     bool shutdown_command; /* allow shutdown command */
@@ -513,22 +503,6 @@ struct settings {
     bool watch_enabled; /* allows watch commands to be dropped */
     bool relaxed_privileges;   /* Relax process restrictions when running testapp */
     struct slab_rebal_thread *slab_rebal; /* struct for page mover thread */
-#ifdef EXTSTORE
-    unsigned int ext_io_threadcount; /* number of IO threads to run. */
-    unsigned int ext_page_size; /* size in megabytes of storage pages. */
-    unsigned int ext_item_size; /* minimum size of items to store externally */
-    unsigned int ext_item_age; /* max age of tail item before storing ext. */
-    unsigned int ext_low_ttl; /* remaining TTL below this uses own pages */
-    unsigned int ext_recache_rate; /* counter++ % recache_rate == 0 > recache */
-    unsigned int ext_wbuf_size; /* read only note for the engine */
-    unsigned int ext_compact_under; /* when fewer than this many pages, compact */
-    unsigned int ext_drop_under; /* when fewer than this many pages, drop COLD items */
-    unsigned int ext_max_sleep; /* maximum sleep time for extstore bg threads, in us */
-    double ext_max_frag; /* ideal maximum page fragmentation */
-    bool ext_drop_unread; /* skip unread items during compaction */
-    /* start flushing to extstore after memory below this */
-    unsigned int ext_global_pool_min;
-#endif
 #ifdef TLS
     void *ssl_ctx; /* holds the SSL server context which has the server certificate */
     char *ssl_chain_cert; /* path to the server SSL chain certificate */
@@ -588,11 +562,6 @@ extern struct settings settings;
 #define ITEM_STALE 2048
 /* if item key was sent in binary */
 #define ITEM_KEY_BINARY 4096
-/* extstore RDMA: a per-item remote flush WRITE is in flight (one-in-flight
- * per key; the write-completion cb clears it). See EXTSTORE_RDMA_SPEC.md P-2. */
-#define ITEM_RFLUSH 8192
-
-#define ITEM_PRESERVE_FLAGS (ITEM_FETCHED|ITEM_TOKEN_SENT|ITEM_STALE|ITEM_KEY_BINARY)
 
 /**
  * Structure for storing items within memcached.
@@ -883,9 +852,6 @@ struct conn {
     int resps_suspended; /* see notes on io_queue_cb_t */
 #ifdef PROXY
     void *proxy_rctx; /* pointer to active request context */
-#endif
-#ifdef EXTSTORE
-    unsigned int recache_counter;
 #endif
     enum protocol protocol;   /* which protocol this connection speaks */
     enum network_transport transport; /* what transport is used by this connection */

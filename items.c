@@ -976,6 +976,16 @@ item *do_item_get(const char *key, const size_t nkey, const uint32_t hv, LIBEVEN
     if (it != NULL) {
         refcount_incr(it);
     }
+#ifdef EXTSTORE
+    /* Remote-only invariant: a storage-enabled hash table may contain metadata
+     * stubs, never a locally serviceable value. Remove any legacy/faulted full
+     * item instead of silently turning it into a local-cache hit. */
+    if (it != NULL && t->storage != NULL && (it->it_flags & ITEM_HDR) == 0) {
+        do_item_unlink(it, hv);
+        do_item_remove(it);
+        it = NULL;
+    }
+#endif
     int was_found = 0;
 
     if (it != NULL) {

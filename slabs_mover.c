@@ -3,7 +3,6 @@
 #include "slabs_mover.h"
 #include "slab_automove.h"
 #ifdef EXTSTORE
-#include "slab_automove_extstore.h"
 #endif
 #include "storage.h"
 #include <sys/mman.h>
@@ -76,13 +75,6 @@ static slab_automove_reg_t slab_automove_default = {
     .free = slab_automove_free,
     .run = slab_automove_run
 };
-#ifdef EXTSTORE
-static slab_automove_reg_t slab_automove_extstore = {
-    .init = slab_automove_extstore_init,
-    .free = slab_automove_extstore_free,
-    .run = slab_automove_extstore_run
-};
-#endif
 
 // the sleep inbetween loops is short, so 1000 loops is < 1s
 #define SLAB_MOVE_MAX_LOOPS 5000
@@ -774,13 +766,11 @@ struct slab_rebal_thread *start_slab_maintenance_thread(void *storage) {
     pthread_mutex_init(&t->lock, NULL);
     pthread_cond_init(&t->cond, NULL);
     t->run_thread = true;
+    t->sam = &slab_automove_default;
     if (storage) {
 #ifdef EXTSTORE
         t->storage = storage;
-        t->sam = &slab_automove_extstore;
 #endif
-    } else {
-        t->sam = &slab_automove_default;
     }
     t->active_am = t->sam->init(&settings);
     if (t->active_am == NULL) {

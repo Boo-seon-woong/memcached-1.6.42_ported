@@ -119,18 +119,20 @@ memcached-extstore.o: extstore.c /usr/include/stdc-predef.h config.h \
  /usr/include/x86_64-linux-gnu/bits/mman-map-flags-generic.h \
  /usr/include/x86_64-linux-gnu/bits/mman-linux.h \
  /usr/include/x86_64-linux-gnu/bits/mman-shared.h \
- /usr/include/x86_64-linux-gnu/bits/mman_ext.h /usr/include/netinet/in.h \
- /usr/include/x86_64-linux-gnu/bits/in.h /usr/include/netinet/tcp.h \
- /usr/include/arpa/inet.h /usr/include/netdb.h /usr/include/rpc/netdb.h \
- /usr/include/x86_64-linux-gnu/bits/types/sigevent_t.h \
- /usr/include/x86_64-linux-gnu/bits/types/__sigval_t.h \
- /usr/include/x86_64-linux-gnu/bits/netdb.h \
+ /usr/include/x86_64-linux-gnu/bits/mman_ext.h /usr/include/fcntl.h \
+ /usr/include/x86_64-linux-gnu/bits/fcntl.h \
+ /usr/include/x86_64-linux-gnu/bits/fcntl-linux.h \
+ /usr/include/linux/falloc.h /usr/include/x86_64-linux-gnu/bits/stat.h \
+ /usr/include/x86_64-linux-gnu/bits/struct_stat.h \
+ /usr/include/x86_64-linux-gnu/bits/fcntl2.h /usr/include/netinet/in.h \
+ /usr/include/x86_64-linux-gnu/bits/in.h /usr/include/arpa/inet.h \
  /usr/include/infiniband/verbs.h /usr/include/linux/types.h \
  /usr/include/x86_64-linux-gnu/asm/types.h \
  /usr/include/asm-generic/types.h /usr/include/asm-generic/int-ll64.h \
  /usr/include/infiniband/verbs_api.h \
  /usr/include/infiniband/ib_user_ioctl_verbs.h \
- /usr/include/rdma/ib_user_verbs.h extstore.h
+ /usr/include/rdma/ib_user_verbs.h /usr/include/rdma/rdma_cma.h \
+ /usr/include/infiniband/sa.h extstore.h
 /usr/include/stdc-predef.h:
 config.h:
 /usr/lib/gcc/x86_64-linux-gnu/13/include/stdbool.h:
@@ -270,15 +272,16 @@ config.h:
 /usr/include/x86_64-linux-gnu/bits/mman-linux.h:
 /usr/include/x86_64-linux-gnu/bits/mman-shared.h:
 /usr/include/x86_64-linux-gnu/bits/mman_ext.h:
+/usr/include/fcntl.h:
+/usr/include/x86_64-linux-gnu/bits/fcntl.h:
+/usr/include/x86_64-linux-gnu/bits/fcntl-linux.h:
+/usr/include/linux/falloc.h:
+/usr/include/x86_64-linux-gnu/bits/stat.h:
+/usr/include/x86_64-linux-gnu/bits/struct_stat.h:
+/usr/include/x86_64-linux-gnu/bits/fcntl2.h:
 /usr/include/netinet/in.h:
 /usr/include/x86_64-linux-gnu/bits/in.h:
-/usr/include/netinet/tcp.h:
 /usr/include/arpa/inet.h:
-/usr/include/netdb.h:
-/usr/include/rpc/netdb.h:
-/usr/include/x86_64-linux-gnu/bits/types/sigevent_t.h:
-/usr/include/x86_64-linux-gnu/bits/types/__sigval_t.h:
-/usr/include/x86_64-linux-gnu/bits/netdb.h:
 /usr/include/infiniband/verbs.h:
 /usr/include/linux/types.h:
 /usr/include/x86_64-linux-gnu/asm/types.h:
@@ -287,4 +290,6 @@ config.h:
 /usr/include/infiniband/verbs_api.h:
 /usr/include/infiniband/ib_user_ioctl_verbs.h:
 /usr/include/rdma/ib_user_verbs.h:
+/usr/include/rdma/rdma_cma.h:
+/usr/include/infiniband/sa.h:
 extstore.h:

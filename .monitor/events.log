@@ -1,0 +1,153 @@
+2026-07-23 11:48:47 UTC
+221ccb0 [genie] fix UAF in extstore completion loop + genie_memd CM deadlock on disconnect
+
+2026-07-23 12:02:04 UTC
+f52b32f [genie] log CM peer ip:port, connect requests, and previously-swallowed CM events
+
+2026-07-23 12:08:43 UTC
+cd76f26 [genie] guest 10.99.0.3 reached CM and established cleanly; fault is client-side
+
+2026-07-23 12:09:14 UTC
+520ff6d [genie] retry #2: 40s up, still single QP, graceful close; ext_threads=2 as discriminator
+
+2026-07-23 12:16:23 UTC
+68f9e4e [genie] warn once when ibv_advise_mr(SYNC_FOR_CPU) fails; it returns EOPNOTSUPP on stock mlx5
+
+2026-07-23 12:21:30 UTC
+38dbf5e [genie] torn-read stress on non-TEE: retry path still never fires (0 retries, 0 badcrc, ASAN clean)
+
+2026-07-23 12:25:05 UTC
+17ef497 [genie] fault-injected retry path: both branches ASAN-clean; found get_misses not counted on badcrc
+
+2026-07-23 12:31:14 UTC
+e0f7887 [genie] add SIGUSR1 MR dump to genie_memd; survive signals instead of dying on EINTR
+
+2026-07-23 12:37:22 UTC
+36c67af [genie] ask #1: guest WRITE did not land (MR all zero, positive control passes); add --prefill
+
+2026-07-23 12:40:56 UTC
+24624cd [genie] dump: guest WRITE arrived carrying zeros (496B of 0x00 in the 0xAA field)
+
+2026-07-23 12:46:34 UTC
+41af207 [genie] add opt-in EXT_SELFTEST: write a known pattern to remote memory and read it back at init
+
+2026-07-23 12:51:10 UTC
+b110ab0 [genie] call ibv_advise_mr(SYNC_FOR_DEVICE) on staging before RDMA WRITE
+
+2026-07-23 12:58:20 UTC
+a1c4f93 [genie] non-TEE baseline numbers; correct the read_retries rule; 77 reads silently lost under write load
+
+2026-07-23 13:06:30 UTC
+bd2cf69 [genie] torn read permanently deletes the key (item_unlink on badcrc); add tools/torn-repro.sh
+
+2026-07-23 13:08:33 UTC
+c481673 [genie] verification FAIL: torn-read fix never executes (read_reresolved 0, 112 keys still lost)
+
+2026-07-23 13:14:41 UTC
+6d765a0 [genie] re-gate c1c408e: deletion fixed (curr_items 20000), but ~440 keys are now permanently unreadable
+
+2026-07-23 13:23:54 UTC
+5432858 [genie] badcrc diagnostic run: page_version intact, slot holds a valid foreign object, zero double-frees
+
+2026-07-23 13:25:26 UTC
+ca6e94d [admin] permission
+
+2026-07-23 13:33:37 UTC
+c277761 [genie] problem B: slot holds the SAME key's object — my aliasing theory is refuted
+
+2026-07-23 13:45:22 UTC
+3caa9ec [genie] server up on 10.99.0.2:11212 (prefilled, idle) — acceptance gate is clear to run
+
+2026-07-23 13:47:25 UTC
+ad0074a [genie] problem-B probes: sealed-vs-read length at badcrc, counters on the pre-read reject paths
+
+2026-07-23 13:59:11 UTC
+d097cc8 [genie] MR dump confirms the guest's selftest pattern and sealed object landed; acceptance gate independently verified
+
+2026-07-23 14:03:47 UTC
+45a565e [genie] problem B: stub len (500) disagrees with the sealed object len (499) at the same loc
+
+2026-07-23 14:15:32 UTC
+38f9d43 [genie] re-gate PASS at c739953: 0 badcrc, 0 retries, 0 misses, curr_items 20000 across read-only passes
+
+2026-07-23 14:20:08 UTC
+5349369 [genie] hold :11212 for the two-host D6 run; restarted once with a virgin prefilled MR
+
+2026-07-23 14:23:43 UTC
+f3efee0 [genie] stage tools/mixed-size-stress.sh; flag two capacity properties of the free-list reuse rule
+
+2026-07-23 15:10:44 UTC
+ed5eedb [admin]
+
+2026-07-23 15:13:18 UTC
+d0752fd [genie] confirm 128-QP accept path for the x8 sweep point; raise listen backlog 64 -> 1024
+
+2026-07-23 15:14:19 UTC
+0ac968f [genie] point ariel at the 128-QP result (commits crossed); flag two traps in the spans/write-batch work
+
+2026-07-23 15:29:39 UTC
+313bab4 [admin]
+
+2026-07-23 15:30:41 UTC
+7770560 [genie] accept standing authorization; propose an HCA token so SEV runs and loopback mirrors never overlap
+c1cadb0 [ariel] D6 pre-run finding: SYNC advise ioctl ~95us dominates the ~100us span, exceeds 30us target alone; ask admin how to proceed (recommend investigating the advise cost first)
+
+2026-07-23 15:32:13 UTC
+6962413 [genie] measure the advise ioctl floor: ~0.6us flat in nsge on stock mlx5, so the guest's 95us is sync work
+
+2026-07-23 15:33:46 UTC
+5af4cfd [genie] channel entry for 6962413: advise ioctl floor ~0.6us, so the guest's 95us is sync work not call overhead
+
+2026-07-23 15:37:21 UTC
+fa510e9 [genie] stage tools/loopback-mirror.sh for the batch mirror; parses ariel's prof span stats
+
+2026-07-23 16:27:23 UTC
+3229d09 [admin]
+7ec5ae1 [admin] merge: take remote D6 pre-run findings; drop local liveness-check draft
+37904ac [admin]
+
+2026-07-23 16:28:55 UTC
+7fa4f34 [genie] ready for the post-reload gate; MR restarted virgin+prefilled so partial writes are distinguishable
+
+2026-07-23 16:33:31 UTC
+e413758 [admin]
+
+2026-07-23 16:35:03 UTC
+1e0cef4 [genie] outside observation: guest reachable on IPoIB, but zero RDMA activity since 15:36:59
+
+2026-07-24 01:10:16 UTC
+8825df7 [genie] retune mirror to 4M keys / -m 1024 to match ariel's RAM-adapted sweep; rebuild binary with prof stats
+
+2026-07-24 01:18:27 UTC
+76e354e [genie] restart genie_memd clean — gate unblocked; old listener was stale after the guest's mlx5_ib reload
+
+2026-07-24 01:21:00 UTC
+f97d107 [genie] mirror prints the sync/xfer breakout (e49469f); rebuild binary for the new prof symbols
+
+2026-07-24 01:34:17 UTC
+7425911 [genie] root cause: partial rebuild = ABI-skewed client, not a server fault; make clean fixes it
+
+2026-07-24 01:39:55 UTC
+4b8d693 [genie] MR dump: gatekey is whole ciphertext (105 contiguous bytes, no 0xAA tail); clamp not partial
+
+2026-07-24 01:43:29 UTC
+ca74350 [genie] gate closed (107 vs 105 = 2 coincidental 0xAA, clean decrypt proves whole); holding off-fabric for the sweep
+
+2026-07-24 01:53:42 UTC
+048217d [genie] hold through the guest resize; genie_memd unaffected; make-clean reminder for the redeployed client
+
+2026-07-24 02:03:55 UTC
+d806707 [genie] bounced to fresh verified listener 250803; evidence says the gate failure is guest-side RDMA bring-up
+
+2026-07-24 02:15:40 UTC
+d942250 [genie] neighbour refreshed (REACHABLE), ib_send_bw -R server up on 18515; guest port GUID unchanged across resize
+
+2026-07-24 03:03:42 UTC
+0299668 [genie] bounce listeners fresh + verified accepting; probes torn down; flag responder_resources as the likely REJECT cause
+
+2026-07-24 03:34:23 UTC
+5128655 [genie] retune mirror to 10M/-m2048 for the resized guest; holding off-fabric for the full sweep
+
+2026-07-24 03:55:51 UTC
+d4ec878 [genie] hold for ariel's throughput sweep; fresh genie_memd verified; mirror deferred (hit the same tracked-binary trap)
+

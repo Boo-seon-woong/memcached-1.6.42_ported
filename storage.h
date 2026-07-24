@@ -18,22 +18,15 @@ void storage_prof_reset(void);   // D6: clear in-server span histograms
 bool storage_validate_item(void *e, item *it);
 #ifdef EXTSTORE
 int storage_get_item(LIBEVENT_THREAD *t, item *it, mc_resp *resp);
-// Immediate per-item flush at store time (D7). Caller holds item_lock(hv).
-void storage_flush_on_store(void *e, item *it, item *old_it, uint32_t hv);
+// Commit one value remotely and return an unlinked ITEM_HDR. Caller holds
+// item_lock(hv); no local value is published on failure.
+int storage_store_item(void *e, item *it, item **hdr_it, uint32_t hv);
 #else
 #define storage_get_item NULL
 #endif
 
 // callback for the IO queue subsystem.
 void storage_submit_cb(io_queue_t *q);
-
-// Thread functions.
-int start_storage_write_thread(void *arg);
-void storage_write_pause(void);
-void storage_write_resume(void);
-int start_storage_compact_thread(void *arg);
-void storage_compact_pause(void);
-void storage_compact_resume(void);
 
 // Init functions.
 struct extstore_conf_file *storage_conf_parse(char *arg);

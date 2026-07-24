@@ -32,7 +32,7 @@ run_point(){
   local ext=$1 workers=$2
   echo "############ POINT ext_threads=$ext workers=$workers mt=${MT_T}x${MT_C} keys=$KEYS ############"
   pkill -x memcached 2>/dev/null; sleep 1; tmux kill-session -t d6 2>/dev/null
-  tmux new-session -d -s d6 "$ENV ./memcached -p 11211 -U 0 -t $workers -m $MC_M -o ext_path=$GENIE:4g,ext_item_size=2,ext_item_age=0,ext_threads=$ext 2>&1 | tee mc.d6.log"
+  tmux new-session -d -s d6 "$ENV ./memcached -p 11211 -U 0 -t $workers -m $MC_M -o ext_path=$GENIE:4g,ext_threads=$ext 2>&1 | tee mc.d6.log"
   sleep 4
   if ! pgrep -x memcached >/dev/null; then echo "  ABORTED: memcached did not start"; grep -i "fail\|refuse\|selftest" mc.d6.log|head -2; return; fi
   echo "  preload $KEYS keys..."

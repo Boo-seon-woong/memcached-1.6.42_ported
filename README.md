@@ -1,3 +1,14 @@
+# memcached-1.6.42 RDMA remote-memory port
+
+이 트리의 SEV-SNP guest 실험은
+[`md/experiment.md`](md/experiment.md)를 위에서 아래로 따라 실행한다.
+원본 memcached 대비 source-level 변경 명세는
+[`SOURCE_CHANGE_SPEC.md`](SOURCE_CHANGE_SPEC.md)를 참조한다.
+extstore가 켜지면 성공한 SET value는 AES-256-GCM으로 원격 WRITE가 완료된 뒤
+`ITEM_HDR` metadata만 local RAM에 남으며, local value cache/fallback은 없다.
+
+아래는 upstream memcached README다.
+
 # Memcached
 
 Memcached is a high performance multithreaded event-based key/value cache

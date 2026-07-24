@@ -1662,14 +1662,28 @@ enum store_item_type do_store_item(item *it, int comm, LIBEVENT_THREAD *t, const
         }
 
         if (do_store) {
-            item_replace(old_it, it, hv, cas_in);
-            stored = STORED;
+            item *publish_it = it;
 #ifdef EXTSTORE
-            // D7 immediate flush; inherit old_it's remote slot for in-place
-            // overwrite (P-1a) instead of deleting it.
-            if (t->storage)
-                storage_flush_on_store(t->storage, it, old_it, hv);
+            item *remote_it = NULL;
+            if (t->storage &&
+                storage_store_item(t->storage, it, &remote_it, hv) != 0) {
+                do_store = false;
+            } else if (remote_it != NULL) {
+                publish_it = remote_it;
+            }
 #endif
+            if (do_store) {
+                item_replace(old_it, publish_it, hv, cas_in);
+#ifdef EXTSTORE
+                if (t->storage && (old_it->it_flags & ITEM_HDR))
+                    storage_delete(t->storage, old_it);
+#endif
+                stored = STORED;
+                if (publish_it != it) {
+                    it = publish_it;
+                    do_item_remove(publish_it);
+                }
+            }
         }
 
         do_item_remove(old_it);         /* release our reference */
@@ -1706,12 +1720,24 @@ enum store_item_type do_store_item(item *it, int comm, LIBEVENT_THREAD *t, const
         }
 
         if (do_store) {
-            do_item_link(it, hv, cas_in);
-            stored = STORED;
+            item *publish_it = it;
 #ifdef EXTSTORE
-            if (t->storage)
-                storage_flush_on_store(t->storage, it, NULL, hv);
+            item *remote_it = NULL;
+            if (t->storage &&
+                storage_store_item(t->storage, it, &remote_it, hv) != 0) {
+                do_store = false;
+            } else if (remote_it != NULL) {
+                publish_it = remote_it;
+            }
 #endif
+            if (do_store) {
+                do_item_link(publish_it, hv, cas_in);
+                stored = STORED;
+                if (publish_it != it) {
+                    it = publish_it;
+                    do_item_remove(publish_it);
+                }
+            }
         }
     }
 
@@ -1824,7 +1850,6 @@ void server_stats(ADD_STAT add_stats, void *c) {
         APPEND_STAT("get_extstore", "%llu", (unsigned long long)thread_stats.get_extstore);
         APPEND_STAT("get_aborted_extstore", "%llu", (unsigned long long)thread_stats.get_aborted_extstore);
         APPEND_STAT("get_oom_extstore", "%llu", (unsigned long long)thread_stats.get_oom_extstore);
-        APPEND_STAT("recache_from_extstore", "%llu", (unsigned long long)thread_stats.recache_from_extstore);
         APPEND_STAT("miss_from_extstore", "%llu", (unsigned long long)thread_stats.miss_from_extstore);
         APPEND_STAT("badcrc_from_extstore", "%llu", (unsigned long long)thread_stats.badcrc_from_extstore);
     }
@@ -1969,19 +1994,6 @@ void process_stat_settings(ADD_STAT add_stats, void *c) {
     APPEND_STAT("inline_ascii_response", "%s", "no"); // setting is dead, cannot be yes.
 #ifdef HAVE_DROP_PRIVILEGES
     APPEND_STAT("drop_privileges", "%s", settings.drop_privileges ? "yes" : "no");
-#endif
-#ifdef EXTSTORE
-    APPEND_STAT("ext_item_size", "%u", settings.ext_item_size);
-    APPEND_STAT("ext_item_age", "%u", settings.ext_item_age);
-    APPEND_STAT("ext_low_ttl", "%u", settings.ext_low_ttl);
-    APPEND_STAT("ext_recache_rate", "%u", settings.ext_recache_rate);
-    APPEND_STAT("ext_wbuf_size", "%u", settings.ext_wbuf_size);
-    APPEND_STAT("ext_compact_under", "%u", settings.ext_compact_under);
-    APPEND_STAT("ext_drop_under", "%u", settings.ext_drop_under);
-    APPEND_STAT("ext_max_sleep", "%u", settings.ext_max_sleep);
-    APPEND_STAT("ext_max_frag", "%.2f", settings.ext_max_frag);
-    APPEND_STAT("slab_automove_freeratio", "%.3f", settings.slab_automove_freeratio);
-    APPEND_STAT("ext_drop_unread", "%s", settings.ext_drop_unread ? "yes" : "no");
 #endif
 #ifdef TLS
     APPEND_STAT("ssl_enabled", "%s", settings.ssl_enabled ? "yes" : "no");
@@ -4138,30 +4150,12 @@ static void usage(void) {
     printf("   - sock_cookie_id:      attributes an ID to a socket for ip filtering/firewalls \n");
 #endif
 #ifdef EXTSTORE
-    printf("\n   - External storage (ext_*) related options (see: https://memcached.org/extstore)\n");
-    printf("   - ext_path:            file to write to for external storage.\n"
-           "                          ie: ext_path=/mnt/d1/extstore:1G\n"
-           "   - ext_page_size:       size in megabytes of storage pages. (default: %u)\n"
-           "   - ext_wbuf_size:       size in megabytes of page write buffers. (default: %u)\n"
-           "   - ext_threads:         number of IO threads to run. (default: %u)\n"
-           "   - ext_item_size:       store items larger than this (bytes, default %u)\n"
-           "   - ext_item_age:        store items idle at least this long (seconds, default: no age limit)\n"
-           "   - ext_low_ttl:         consider TTLs lower than this specially (default: %u)\n"
-           "   - ext_drop_unread:     don't re-write unread values during compaction (default: %s)\n"
-           "   - ext_recache_rate:    recache an item every N accesses (default: %u)\n"
-           "   - ext_compact_under:   compact when fewer than this many free pages\n"
-           "                          (default: 1 percent of the assigned storage)\n"
-           "   - ext_drop_under:      drop COLD items when fewer than this many free pages\n"
-           "                          (default: 1/4th of the assigned storage)\n"
-           "   - ext_max_frag:        only defrag pages if they are less full than this pct-wise (default: %.2f)\n"
-           "   - ext_max_sleep:       max sleep time of background threads in us (default: %u)\n"
-           "   - slab_automove_freeratio: ratio of memory to hold free as buffer.\n"
-           "                          (see doc/storage.txt for more info, default: %.3f)\n",
-           settings.ext_page_size / (1 << 20), settings.ext_wbuf_size / (1 << 20), settings.ext_io_threadcount,
-           settings.ext_item_size, settings.ext_low_ttl,
-           flag_enabled_disabled(settings.ext_drop_unread), settings.ext_recache_rate,
-           settings.ext_max_frag, settings.ext_max_sleep, settings.slab_automove_freeratio);
-    verify_default("ext_item_age", settings.ext_item_age == UINT_MAX);
+    printf("\n   - RDMA remote storage options\n");
+    printf("   - ext_path:            Genie endpoint and remote MR size.\n"
+           "                          ie: ext_path=10.99.0.2:11212:4g\n"
+           "   - ext_page_size:       remote allocation page size in MiB (default: 64)\n"
+           "   - ext_threads:         RDMA connection count (default: 1)\n"
+           "   - ext_io_depth:        maximum outstanding operations per connection (default: 64)\n");
 #endif
 #ifdef PROXY
     printf("   - proxy_config:        path to lua library file. separate with ':' for multiple files\n"
@@ -6046,15 +6040,6 @@ int main (int argc, char **argv) {
         exit(EXIT_FAILURE);
     }
 #ifdef EXTSTORE
-    if (storage && start_storage_compact_thread(storage) != 0) {
-        fprintf(stderr, "Failed to start storage compaction thread\n");
-        exit(EXIT_FAILURE);
-    }
-    if (storage && start_storage_write_thread(storage) != 0) {
-        fprintf(stderr, "Failed to start storage writer thread\n");
-        exit(EXIT_FAILURE);
-    }
-
     if (start_lru_maintainer && start_lru_maintainer_thread(storage) != 0) {
 #else
     if (start_lru_maintainer && start_lru_maintainer_thread(NULL) != 0) {

@@ -160,10 +160,6 @@ void pause_threads(enum pause_thread_types type) {
             slab_maintenance_pause(settings.slab_rebal);
             lru_maintainer_pause();
             lru_crawler_pause();
-#ifdef EXTSTORE
-            storage_compact_pause();
-            storage_write_pause();
-#endif
         case PAUSE_WORKER_THREADS:
             pause_workers = true;
             pthread_mutex_lock(&worker_hang_lock);
@@ -172,10 +168,6 @@ void pause_threads(enum pause_thread_types type) {
             slab_maintenance_resume(settings.slab_rebal);
             lru_maintainer_resume();
             lru_crawler_resume();
-#ifdef EXTSTORE
-            storage_compact_resume();
-            storage_write_resume();
-#endif
         case RESUME_WORKER_THREADS:
             pthread_mutex_unlock(&worker_hang_lock);
             break;
@@ -1155,4 +1147,3 @@ void memcached_thread_init(int nthreads, void *arg) {
     wait_for_thread_registration(nthreads);
     pthread_mutex_unlock(&init_lock);
 }
-

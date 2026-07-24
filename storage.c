@@ -19,9 +19,8 @@
 #define PAGE_BUCKET_COUNT   1
 
 static bool g_crypto_on = false;
-static unsigned int g_read_retries = 3;   // torn-read retry cap (EXT_READ_RETRIES)
-static _Atomic uint64_t g_read_retry_ct = 0;  // torn-read retries observed (debug)
-static _Atomic uint64_t g_read_reresolve_ct = 0;  // reads recovered from RAM after retry exhaustion
+static unsigned int g_read_retries = 3;   // integrity-read retry cap (EXT_READ_RETRIES)
+static _Atomic uint64_t g_read_retry_ct = 0;
 static _Atomic uint64_t g_badcrc_log_ct = 0;      // rate-limit for the badcrc diagnostic
 static _Atomic uint64_t g_flush_log_ct = 0;       // rate-limit for the flush diagnostic
 
@@ -44,16 +43,22 @@ static uint64_t nonce_counter(const void *obj) {   /* [salt 4][counter 8] */
     uint64_t c; memcpy(&c, (const char *)obj + 4, 8); return c;
 }
 
-// Write-path context carried across the async RDMA WRITE completion (P-2).
 typedef struct {
-    item *it;
-    uint32_t hv;
-    struct ext_loc loc;
-    char *slot;
-    obj_io io;
-} flush_ctx;
+    pthread_mutex_t mutex;
+    pthread_cond_t cond;
+    int done;
+    int ret;
+} store_wait;
 
-static void storage_write_done_cb(void *e, obj_io *io, int ret);
+static void storage_store_done_cb(void *e, obj_io *io, int ret) {
+    (void)e;
+    store_wait *w = io->data;
+    pthread_mutex_lock(&w->mutex);
+    w->ret = ret;
+    w->done = 1;
+    pthread_cond_signal(&w->cond);
+    pthread_mutex_unlock(&w->mutex);
+}
 
 /*
  * API functions
@@ -138,8 +143,6 @@ void process_extstore_stats(ADD_STAT add_stats, void *c) {
                 (unsigned long long) st.page_data[i].bytes_used);
         APPEND_NUM_STAT(i, "bucket", "%u",
                 st.page_data[i].bucket);
-        APPEND_NUM_STAT(i, "free_bucket", "%u",
-                st.page_data[i].free_bucket);
     }
 
     free(st.page_data);
@@ -149,29 +152,16 @@ void process_extstore_stats(ADD_STAT add_stats, void *c) {
 void storage_stats(ADD_STAT add_stats, void *c) {
     struct extstore_stats st;
     if (ext_storage) {
-        STATS_LOCK();
-        APPEND_STAT("extstore_memory_pressure", "%.2f", stats_state.extstore_memory_pressure);
-        APPEND_STAT("extstore_compact_lost", "%llu", (unsigned long long)stats.extstore_compact_lost);
-        APPEND_STAT("extstore_compact_rescues", "%llu", (unsigned long long)stats.extstore_compact_rescues);
-        APPEND_STAT("extstore_compact_resc_cold", "%llu", (unsigned long long)stats.extstore_compact_resc_cold);
-        APPEND_STAT("extstore_compact_resc_old", "%llu", (unsigned long long)stats.extstore_compact_resc_old);
-        APPEND_STAT("extstore_compact_skipped", "%llu", (unsigned long long)stats.extstore_compact_skipped);
-        STATS_UNLOCK();
         extstore_get_stats(ext_storage, &st);
         APPEND_STAT("extstore_page_allocs", "%llu", (unsigned long long)st.page_allocs);
-        APPEND_STAT("extstore_page_evictions", "%llu", (unsigned long long)st.page_evictions);
-        APPEND_STAT("extstore_page_reclaims", "%llu", (unsigned long long)st.page_reclaims);
         APPEND_STAT("extstore_pages_free", "%llu", (unsigned long long)st.pages_free);
         APPEND_STAT("extstore_pages_used", "%llu", (unsigned long long)st.pages_used);
-        APPEND_STAT("extstore_objects_evicted", "%llu", (unsigned long long)st.objects_evicted);
         APPEND_STAT("extstore_objects_read", "%llu", (unsigned long long)st.objects_read);
         APPEND_STAT("extstore_objects_written", "%llu", (unsigned long long)st.objects_written);
         APPEND_STAT("extstore_objects_used", "%llu", (unsigned long long)st.objects_used);
-        APPEND_STAT("extstore_bytes_evicted", "%llu", (unsigned long long)st.bytes_evicted);
         APPEND_STAT("extstore_bytes_written", "%llu", (unsigned long long)st.bytes_written);
         APPEND_STAT("extstore_bytes_read", "%llu", (unsigned long long)st.bytes_read);
         APPEND_STAT("extstore_bytes_used", "%llu", (unsigned long long)st.bytes_used);
-        APPEND_STAT("extstore_bytes_fragmented", "%llu", (unsigned long long)st.bytes_fragmented);
         APPEND_STAT("extstore_limit_maxbytes", "%llu", (unsigned long long)(st.page_count * st.page_size));
         APPEND_STAT("extstore_io_queue", "%llu", (unsigned long long)(st.io_queue));
         // RDMA bring-up debug counters (SPEC §8). Nonzero = look here first.
@@ -180,8 +170,6 @@ void storage_stats(ADD_STAT add_stats, void *c) {
         APPEND_STAT("extstore_read_failures", "%llu", (unsigned long long)st.read_failures);
         APPEND_STAT("extstore_read_retries", "%llu",
                 (unsigned long long)atomic_load(&g_read_retry_ct));
-        APPEND_STAT("extstore_read_reresolved", "%llu",
-                (unsigned long long)atomic_load(&g_read_reresolve_ct));
         APPEND_STAT("extstore_get_aborted_chunked", "%llu",
                 (unsigned long long)atomic_load(&g_abort_chunked));
         APPEND_STAT("extstore_get_aborted_alloc", "%llu",
@@ -223,32 +211,15 @@ static void _storage_get_item_cb(void *e, obj_io *io, int ret) {
         struct ext_aad aad = { .hv = hv, .page_id = io->page_id, .pad = 0,
             .offset = io->offset, .page_version = io->page_version };
         if (ext_crypto_open(read_it, (uint8_t *)io->buf, io->len, &aad) < 0) {
-            // tag fail = torn read (concurrent in-place overwrite) or tamper.
+            // Retry a transient DMA visibility failure; never serve unverified data.
             if (io->retries++ < g_read_retries) {
                 atomic_fetch_add(&g_read_retry_ct, 1);
                 io->next = NULL;
                 extstore_submit(e, io);   // engine frees this bounce slot, re-posts
                 return;
             }
-            // Retries exhausted: an in-place overwrite (P-1a) keeps racing this
-            // read, so re-reading the slot can never win. Don't lose data — the
-            // overwrite came from a SET that had the value in RAM, so re-resolve
-            // the key and serve the live RAM copy if it's still there and the
-            // same size. (genie's finding: torn reads under write load returned
-            // miss for data that exists.)
-            uint32_t rhv = hash(ITEM_key(p->hdr_it), p->hdr_it->nkey);
-            item_lock(rhv);
-            item *cur = assoc_find(ITEM_key(p->hdr_it), p->hdr_it->nkey, rhv);
-            if (cur && !(cur->it_flags & ITEM_HDR) &&
-                    ITEM_ntotal(cur) == ITEM_ntotal(p->hdr_it)) {
-                memcpy(read_it, cur, ITEM_ntotal(cur));  // serve live value (copy under lock)
-                item_unlock(rhv);
-                atomic_fetch_add(&g_read_reresolve_ct, 1);
-                // fall through to the hit path (miss stays false).
-            } else {
-                item_unlock(rhv);
-                miss = true;
-                p->badcrc = true;
+            miss = true;
+            p->badcrc = true;
                 // Diagnostic (genie's request): a permanently-unreadable key means
                 // the stub's AAD no longer matches the object in its slot. Log the
                 // expected loc, whether the page version still matches, and the
@@ -281,7 +252,6 @@ static void _storage_get_item_cb(void *e, obj_io *io, int ret) {
                 // bogus header (ASAN SEGV, slabs.c:468).
                 read_it->it_flags = 0;
                 read_it->slabs_clsid = p->read_clsid;
-            }
         }
     } else {
         memcpy(read_it, io->buf, io->len);   // crypto off: io->len == ntotal
@@ -459,14 +429,13 @@ void storage_submit_cb(io_queue_t *q) {
 }
 
 // Runs locally in worker thread.
-static void recache_or_free(io_pending_t *pending) {
+static void storage_release_pending(io_pending_t *pending) {
     // re-cast to our specific struct.
     io_pending_storage_t *p = (io_pending_storage_t *)pending;
 
     conn *c = p->c;
     item *it = p->read_it;   // the decrypt destination we allocated
     assert(c != NULL);
-    // D7: no recache — every GET is a real remote read. Just free the buffer.
     if (p->active) {
         // If request never dispatched, free the read buffer, leave header alone.
         slabs_free(it, p->read_clsid);
@@ -478,11 +447,8 @@ static void recache_or_free(io_pending_t *pending) {
         c->thread->stats.get_aborted_extstore++;
         pthread_mutex_unlock(&c->thread->stats.mutex);
     } else if (p->miss) {
-        // A badcrc "miss" is a torn read (in-place overwrite raced us) — the data
-        // still exists in remote memory, so DON'T unlink the key. Unlinking here
-        // permanently deletes a live key and leaks its remote slot (genie's
-        // finding). Only a genuine miss (transport failure / real absence) drops
-        // the stub.
+        // Keep the stub on an integrity failure so a transient DMA visibility
+        // failure can recover on a later GET. No local value is available.
         if (!p->badcrc)
             item_unlink(p->hdr_it);
         slabs_free(it, p->read_clsid);
@@ -509,41 +475,49 @@ static void storage_return_cb(io_pending_t *pending) {
 
 // Called after responses have been transmitted. Need to free up related data.
 static void storage_finalize_cb(io_pending_t *pending) {
-    recache_or_free(pending);
+    storage_release_pending(pending);
     // don't need to free the main context, since it's embedded.
 }
 
 /*
- * WRITE FLUSH — per-item RDMA WRITE at SET time (SPEC §5; D7 immediate flush,
- * D7/P-1 in-place overwrite, P-2 verify-before-swap + one-in-flight-per-key).
+ * Remote-only SET commit. The input item is a transient request buffer and is
+ * never linked into the hash table. A successful RDMA WRITE returns an
+ * unlinked ITEM_HDR; the caller publishes that stub and only then replies
+ * STORED. Resource exhaustion blocks at the staging pool instead of falling
+ * back to a locally serviceable value.
  */
-
-// Seal `it` into a staging slot and submit a remote WRITE. Caller MUST hold
-// item_lock(hv). inherit != NULL reuses the old slot for same-size overwrite.
-static void storage_flush_item(void *e, item *it, uint32_t hv,
-                               const struct ext_loc *inherit) {
+int storage_store_item(void *e, item *it, item **hdr_out, uint32_t hv) {
     size_t ntotal = ITEM_ntotal(it);
     unsigned int rlen = ntotal + (g_crypto_on ? EXT_CRYPTO_OVERHEAD : 0);
-    if ((it->it_flags & (ITEM_CHUNKED|ITEM_HDR)) || it->nbytes <= 2) return;
-    if (it->it_flags & ITEM_RFLUSH) return;   // one in-flight write per key (P-2)
+    *hdr_out = NULL;
+    if (it->it_flags & (ITEM_CHUNKED|ITEM_HDR))
+        return -1;
+
+    client_flags_t flags;
+    FLAGS_CONV(it, flags);
+    item *hdr_it = do_item_alloc(ITEM_key(it), it->nkey, flags, it->exptime,
+                                 sizeof(item_hdr));
+    if (hdr_it == NULL)
+        return -1;
 
     struct ext_loc loc;
-    bool in_place = (inherit && inherit->len == rlen);
-    if (in_place) {
-        loc = *inherit;
-    } else {
-        if (inherit) extstore_free_loc(e, inherit);   // size changed: release old
-        if (extstore_alloc(e, rlen, PAGE_BUCKET_DEFAULT, &loc) != 0)
-            return;                                    // remote full: leave in RAM
+    if (extstore_alloc(e, rlen, PAGE_BUCKET_DEFAULT, &loc) != 0) {
+        do_item_remove(hdr_it);
+        return -1;
     }
 
     char *slot = extstore_staging_get(e);
-    if (!slot) { if (!in_place) extstore_free_loc(e, &loc); return; }  // backpressure
+    if (slot == NULL) {
+        extstore_free_loc(e, &loc);
+        do_item_remove(hdr_it);
+        return -1;
+    }
 
+    int sealed;
     if (g_crypto_on) {
         struct ext_aad aad = { .hv = hv, .page_id = loc.page_id, .pad = 0,
             .offset = loc.offset, .page_version = loc.page_version };
-        ext_crypto_seal((uint8_t *)slot, it, ntotal, &aad);
+        sealed = ext_crypto_seal((uint8_t *)slot, it, ntotal, &aad);
         if (g_seal_tab) {
             uint64_t ctr = nonce_counter(slot);
             if (ctr < SEAL_TRACE_MAX) {
@@ -555,109 +529,59 @@ static void storage_flush_item(void *e, item *it, uint32_t hv,
         }
     } else {
         memcpy(slot, it, ntotal);
+        sealed = (int)ntotal;
     }
-    // Diagnostic (genie's ask): log which key seals which slot + the nonce it
-    // wrote, so a badcrc slot_nonce can be matched back to its true owner.
+    if (sealed != (int)rlen) {
+        extstore_staging_put(e, slot);
+        extstore_free_loc(e, &loc);
+        do_item_remove(hdr_it);
+        return -1;
+    }
+
     if (g_crypto_on && atomic_fetch_add(&g_flush_log_ct, 1) < 200) {
         const unsigned char *n = (const unsigned char *)slot;
-        fprintf(stderr, "extstore flush: key=%.*s -> {page=%u off=%u ver=%u} %s "
+        fprintf(stderr, "extstore flush: key=%.*s -> {page=%u off=%u ver=%u} "
             "nonce=%02x%02x%02x%02x.%02x%02x%02x%02x%02x%02x%02x%02x\n",
             it->nkey, ITEM_key(it), loc.page_id, loc.offset, loc.page_version,
-            in_place ? "in_place" : "alloc",
             n[0],n[1],n[2],n[3],n[4],n[5],n[6],n[7],n[8],n[9],n[10],n[11]);
     }
 
-    // ponytail: per-flush malloc; pool if the SET rate makes it show up.
-    flush_ctx *ctx = calloc(1, sizeof(*ctx));
-    if (!ctx) { extstore_staging_put(e, slot); if (!in_place) extstore_free_loc(e, &loc); return; }
-    it->it_flags |= ITEM_RFLUSH;
-    refcount_incr(it);              // own a reference for the flight (lock held)
-    ctx->it = it; ctx->hv = hv; ctx->loc = loc; ctx->slot = slot;
-    ctx->io.mode = OBJ_IO_WRITE;
-    ctx->io.buf = slot;
-    ctx->io.page_id = loc.page_id;
-    ctx->io.page_version = loc.page_version;
-    ctx->io.offset = loc.offset;
-    ctx->io.len = rlen;
-    ctx->io.cb = storage_write_done_cb;
-    ctx->io.data = ctx;
-    ctx->io.next = NULL;
-    extstore_submit(e, &ctx->io);
-}
+    store_wait wait = {0};
+    pthread_mutex_init(&wait.mutex, NULL);
+    pthread_cond_init(&wait.cond, NULL);
+    obj_io io = {
+        .data = &wait, .next = NULL, .buf = slot,
+        .page_version = loc.page_version, .len = rlen, .offset = loc.offset,
+        .page_id = loc.page_id, .mode = OBJ_IO_WRITE,
+        .cb = storage_store_done_cb,
+    };
+    extstore_submit(e, &io);
 
-// IO-thread context: verify the flushed version is still live, then swap the
-// RAM item for a stub. Handles supersede (chain a re-flush) and delete (P-2).
-static void storage_write_done_cb(void *e, obj_io *io, int ret) {
-    flush_ctx *ctx = io->data;
-    extstore_staging_put(e, ctx->slot);
-    item_lock(ctx->hv);
-    if (ret < 0) {
-        ctx->it->it_flags &= ~ITEM_RFLUSH;      // leave in RAM; next SET retries
-        item_unlock(ctx->hv);
-        item_remove(ctx->it);
-        free(ctx);
-        return;
-    }
-    item *cur = assoc_find(ITEM_key(ctx->it), ctx->it->nkey, ctx->hv);
-    if (cur == ctx->it && (cur->it_flags & ITEM_LINKED)) {
-        client_flags_t flags; FLAGS_CONV(ctx->it, flags);
-        item *hdr_it = do_item_alloc(ITEM_key(ctx->it), ctx->it->nkey, flags,
-                                     ctx->it->exptime, sizeof(item_hdr));
-        if (hdr_it != NULL) {
-            item_hdr *hdr = (item_hdr *)ITEM_data(hdr_it);
-            hdr->page_version = ctx->loc.page_version;
-            hdr->offset = ctx->loc.offset;
-            hdr->len = ctx->loc.len;
-            hdr->page_id = ctx->loc.page_id;
-            // overload nbytes onto the stub so GET reconstructs the original
-            // size (ITEM_ntotal(stub) == original ntotal). Mirrors stock.
-            hdr_it->nbytes = ctx->it->nbytes;
-            hdr_it->it_flags |= ITEM_HDR | (ctx->it->it_flags & ITEM_PRESERVE_FLAGS);
-            do_item_replace(ctx->it, hdr_it, ctx->hv, ITEM_get_cas(ctx->it));
-            do_item_remove(hdr_it);
-        }   // else: alloc failed -> full item stays in RAM, next SET retries
-        ctx->it->it_flags &= ~ITEM_RFLUSH;
-        item_unlock(ctx->hv);
-        item_remove(ctx->it);
-    } else if (cur && !(cur->it_flags & (ITEM_HDR|ITEM_RFLUSH)) &&
-               (unsigned int)(ITEM_ntotal(cur) +
-                   (g_crypto_on ? EXT_CRYPTO_OVERHEAD : 0)) == ctx->loc.len) {
-        // superseded by a same-size SET: chain a re-flush into the same slot.
-        ctx->it->it_flags &= ~ITEM_RFLUSH;
-        storage_flush_item(e, cur, ctx->hv, &ctx->loc);   // takes a ref under lock
-        item_unlock(ctx->hv);
-        item_remove(ctx->it);
-        free(ctx);
-        return;
-    } else {
-        extstore_free_loc(e, &ctx->loc);        // deleted / different size: reclaim
-        ctx->it->it_flags &= ~ITEM_RFLUSH;
-        item_unlock(ctx->hv);
-        item_remove(ctx->it);
-    }
-    free(ctx);
-}
+    pthread_mutex_lock(&wait.mutex);
+    while (!wait.done)
+        pthread_cond_wait(&wait.cond, &wait.mutex);
+    pthread_mutex_unlock(&wait.mutex);
+    pthread_cond_destroy(&wait.cond);
+    pthread_mutex_destroy(&wait.mutex);
+    extstore_staging_put(e, slot);
 
-// Called from the store path (memcached.c) with item_lock(hv) held. Extracts
-// the old item's remote slot for in-place reuse, then flushes.
-void storage_flush_on_store(void *e, item *it, item *old_it, uint32_t hv) {
-    struct ext_loc inh, *pinh = NULL;
-    if (old_it && (old_it->it_flags & ITEM_HDR)) {
-        item_hdr *oh = (item_hdr *)ITEM_data(old_it);
-        inh = (struct ext_loc){ oh->page_version, oh->offset, oh->len, oh->page_id };
-        pinh = &inh;
+    if (wait.ret != (int)rlen) {
+        extstore_free_loc(e, &loc);
+        do_item_remove(hdr_it);
+        return -1;
     }
-    storage_flush_item(e, it, hv, pinh);
-}
 
-// LRU-driven background flush and compaction are gone (D7). No-op stubs for
-// the callers in thread.c / memcached.c.
-void storage_write_pause(void) { }
-void storage_write_resume(void) { }
-int start_storage_write_thread(void *arg) { (void)arg; return 0; }
-void storage_compact_pause(void) { }
-void storage_compact_resume(void) { }
-int start_storage_compact_thread(void *arg) { (void)arg; return 0; }
+    item_hdr *hdr = (item_hdr *)ITEM_data(hdr_it);
+    hdr->page_version = loc.page_version;
+    hdr->offset = loc.offset;
+    hdr->len = loc.len;
+    hdr->page_id = loc.page_id;
+    hdr_it->nbytes = it->nbytes;
+    hdr_it->it_flags |= ITEM_HDR |
+        (it->it_flags & (ITEM_TOKEN_SENT|ITEM_STALE|ITEM_KEY_BINARY));
+    *hdr_out = hdr_it;
+    return 0;
+}
 
 /*** UTILITY ***/
 // ext_path=<genie_host>:<port>:<size>   size unit m|g|t|p (RDMA port)
@@ -690,7 +614,6 @@ struct extstore_conf_file *storage_conf_parse(char *arg) {
             goto error;
     }
     cf->total_size = multiplier * (uint64_t)atoi(size);
-    cf->free_bucket = PAGE_BUCKET_DEFAULT;
     return cf;
 error:
     if (cf) { free(cf->file); free(cf); }
@@ -703,28 +626,13 @@ struct storage_settings {
 };
 
 void *storage_init_config(struct settings *s) {
+    (void)s;
     struct storage_settings *cf = calloc(1, sizeof(struct storage_settings));
 
-    s->ext_item_size = 512;
-    s->ext_item_age = UINT_MAX;
-    s->ext_low_ttl = 0;
-    s->ext_recache_rate = 2000;
-    s->ext_max_frag = 0.8;
-    s->ext_drop_unread = false;
-    s->ext_wbuf_size = 1024 * 1024 * 4;
-    s->ext_compact_under = 0;
-    s->ext_drop_under = 0;
-    s->ext_max_sleep = 1000000;
-    s->slab_automove_freeratio = 0.01;
-    s->ext_page_size = 1024 * 1024 * 64;
-    s->ext_io_threadcount = 1;
-    cf->ext_cf.page_size = settings.ext_page_size;
-    cf->ext_cf.wbuf_size = settings.ext_wbuf_size;
-    cf->ext_cf.io_threadcount = settings.ext_io_threadcount;
+    cf->ext_cf.page_size = 64 * 1024 * 1024;
+    cf->ext_cf.io_threadcount = 1;
     cf->ext_cf.io_depth = 64;
     cf->ext_cf.page_buckets = PAGE_BUCKET_COUNT;
-    cf->ext_cf.wbuf_count = cf->ext_cf.page_buckets;
-    // RDMA slot/staging sizing. ponytail: env knobs; promote to -o if needed.
     char *v;
     cf->ext_cf.slot_size   = (v = getenv("EXT_SLOT_SIZE"))   ? atoi(v) : 2048;
     cf->ext_cf.read_slots  = (v = getenv("EXT_READ_SLOTS"))  ? atoi(v) : 32;
@@ -746,38 +654,16 @@ int storage_read_config(void *conf, char **subopt) {
 
     enum {
         EXT_PAGE_SIZE,
-        EXT_WBUF_SIZE,
         EXT_THREADS,
         EXT_IO_DEPTH,
         EXT_PATH,
-        EXT_ITEM_SIZE,
-        EXT_ITEM_AGE,
-        EXT_LOW_TTL,
-        EXT_RECACHE_RATE,
-        EXT_COMPACT_UNDER,
-        EXT_DROP_UNDER,
-        EXT_MAX_SLEEP,
-        EXT_MAX_FRAG,
-        EXT_DROP_UNREAD,
-        SLAB_AUTOMOVE_FREERATIO, // FIXME: move this back?
     };
 
     char *const subopts_tokens[] = {
         [EXT_PAGE_SIZE] = "ext_page_size",
-        [EXT_WBUF_SIZE] = "ext_wbuf_size",
         [EXT_THREADS] = "ext_threads",
         [EXT_IO_DEPTH] = "ext_io_depth",
         [EXT_PATH] = "ext_path",
-        [EXT_ITEM_SIZE] = "ext_item_size",
-        [EXT_ITEM_AGE] = "ext_item_age",
-        [EXT_LOW_TTL] = "ext_low_ttl",
-        [EXT_RECACHE_RATE] = "ext_recache_rate",
-        [EXT_COMPACT_UNDER] = "ext_compact_under",
-        [EXT_DROP_UNDER] = "ext_drop_under",
-        [EXT_MAX_SLEEP] = "ext_max_sleep",
-        [EXT_MAX_FRAG] = "ext_max_frag",
-        [EXT_DROP_UNREAD] = "ext_drop_unread",
-        [SLAB_AUTOMOVE_FREERATIO] = "slab_automove_freeratio",
         NULL
     };
 
@@ -792,18 +678,6 @@ int storage_read_config(void *conf, char **subopt) {
                 return 1;
             }
             ext_cf->page_size *= 1024 * 1024; /* megabytes */
-            break;
-        case EXT_WBUF_SIZE:
-            if (subopts_value == NULL) {
-                fprintf(stderr, "Missing ext_wbuf_size argument\n");
-                return 1;
-            }
-            if (!safe_strtoul(subopts_value, &ext_cf->wbuf_size)) {
-                fprintf(stderr, "could not parse argument to ext_wbuf_size\n");
-                return 1;
-            }
-            ext_cf->wbuf_size *= 1024 * 1024; /* megabytes */
-            settings.ext_wbuf_size = ext_cf->wbuf_size;
             break;
         case EXT_THREADS:
             if (subopts_value == NULL) {
@@ -825,99 +699,6 @@ int storage_read_config(void *conf, char **subopt) {
                 return 1;
             }
             break;
-        case EXT_ITEM_SIZE:
-            if (subopts_value == NULL) {
-                fprintf(stderr, "Missing ext_item_size argument\n");
-                return 1;
-            }
-            if (!safe_strtoul(subopts_value, &settings.ext_item_size)) {
-                fprintf(stderr, "could not parse argument to ext_item_size\n");
-                return 1;
-            }
-            break;
-        case EXT_ITEM_AGE:
-            if (subopts_value == NULL) {
-                fprintf(stderr, "Missing ext_item_age argument\n");
-                return 1;
-            }
-            if (!safe_strtoul(subopts_value, &settings.ext_item_age)) {
-                fprintf(stderr, "could not parse argument to ext_item_age\n");
-                return 1;
-            }
-            break;
-        case EXT_LOW_TTL:
-            if (subopts_value == NULL) {
-                fprintf(stderr, "Missing ext_low_ttl argument\n");
-                return 1;
-            }
-            if (!safe_strtoul(subopts_value, &settings.ext_low_ttl)) {
-                fprintf(stderr, "could not parse argument to ext_low_ttl\n");
-                return 1;
-            }
-            break;
-        case EXT_RECACHE_RATE:
-            if (subopts_value == NULL) {
-                fprintf(stderr, "Missing ext_recache_rate argument\n");
-                return 1;
-            }
-            if (!safe_strtoul(subopts_value, &settings.ext_recache_rate)) {
-                fprintf(stderr, "could not parse argument to ext_recache_rate\n");
-                return 1;
-            }
-            break;
-        case EXT_COMPACT_UNDER:
-            if (subopts_value == NULL) {
-                fprintf(stderr, "Missing ext_compact_under argument\n");
-                return 1;
-            }
-            if (!safe_strtoul(subopts_value, &settings.ext_compact_under)) {
-                fprintf(stderr, "could not parse argument to ext_compact_under\n");
-                return 1;
-            }
-            break;
-        case EXT_DROP_UNDER:
-            if (subopts_value == NULL) {
-                fprintf(stderr, "Missing ext_drop_under argument\n");
-                return 1;
-            }
-            if (!safe_strtoul(subopts_value, &settings.ext_drop_under)) {
-                fprintf(stderr, "could not parse argument to ext_drop_under\n");
-                return 1;
-            }
-            break;
-        case EXT_MAX_SLEEP:
-            if (subopts_value == NULL) {
-                fprintf(stderr, "Missing ext_max_sleep argument\n");
-                return 1;
-            }
-            if (!safe_strtoul(subopts_value, &settings.ext_max_sleep)) {
-                fprintf(stderr, "could not parse argument to ext_max_sleep\n");
-                return 1;
-            }
-            break;
-        case EXT_MAX_FRAG:
-            if (subopts_value == NULL) {
-                fprintf(stderr, "Missing ext_max_frag argument\n");
-                return 1;
-            }
-            if (!safe_strtod(subopts_value, &settings.ext_max_frag)) {
-                fprintf(stderr, "could not parse argument to ext_max_frag\n");
-                return 1;
-            }
-            break;
-        case SLAB_AUTOMOVE_FREERATIO:
-            if (subopts_value == NULL) {
-                fprintf(stderr, "Missing slab_automove_freeratio argument\n");
-                return 1;
-            }
-            if (!safe_strtod(subopts_value, &settings.slab_automove_freeratio)) {
-                fprintf(stderr, "could not parse argument to slab_automove_freeratio\n");
-                return 1;
-            }
-            break;
-        case EXT_DROP_UNREAD:
-            settings.ext_drop_unread = true;
-            break;
         case EXT_PATH:
             if (subopts_value) {
                 struct extstore_conf_file *tmp = storage_conf_parse(subopts_value);
@@ -930,7 +711,7 @@ int storage_read_config(void *conf, char **subopt) {
                 }
                 cf->storage_file = tmp;
             } else {
-                fprintf(stderr, "missing argument to ext_path, ie: ext_path=/d/file:5G\n");
+                fprintf(stderr, "missing argument to ext_path, ie: ext_path=10.99.0.2:11212:4g\n");
                 return 1;
             }
             break;
@@ -944,15 +725,8 @@ int storage_read_config(void *conf, char **subopt) {
 
 int storage_check_config(void *conf) {
     struct storage_settings *cf = conf;
-    struct extstore_conf *ext_cf = &cf->ext_cf;
 
     if (cf->storage_file) {
-        if (settings.item_size_max > ext_cf->wbuf_size) {
-            fprintf(stderr, "-I (item_size_max: %d) cannot be larger than ext_wbuf_size: %d\n",
-                settings.item_size_max, ext_cf->wbuf_size);
-            return 1;
-        }
-
         if (settings.udpport) {
             fprintf(stderr, "Cannot use UDP with extstore enabled (-U 0 to disable)\n");
             return 1;
@@ -984,22 +758,23 @@ void *storage_init(void *conf) {
     void *storage = NULL;
     crc32c_init();
 
-    // Load AES-256-GCM key if configured (crypto on). ponytail: env path knob.
+    // Remote values are always AES-256-GCM protected.
     const char *keypath = getenv("EXT_CRYPTO_KEY");
-    if (keypath) {
-        FILE *kf = fopen(keypath, "rb");
-        uint8_t key[32];
-        if (!kf || fread(key, 1, 32, kf) != 32) {
-            fprintf(stderr, "ext crypto: cannot read 32-byte key from %s\n", keypath);
-            if (kf) fclose(kf);
-            return NULL;
-        }
-        fclose(kf);
-        ext_crypto_init(key);
-        g_crypto_on = true;
+    if (!keypath) {
+        fprintf(stderr, "ext crypto: EXT_CRYPTO_KEY is required for remote storage\n");
+        return NULL;
     }
+    FILE *kf = fopen(keypath, "rb");
+    uint8_t key[32];
+    if (!kf || fread(key, 1, 32, kf) != 32) {
+        fprintf(stderr, "ext crypto: cannot read 32-byte key from %s\n", keypath);
+        if (kf) fclose(kf);
+        return NULL;
+    }
+    fclose(kf);
+    ext_crypto_init(key);
+    g_crypto_on = true;
 
-    settings.ext_global_pool_min = 0;
     storage = extstore_init(cf->storage_file, ext_cf, &eres);
     if (storage == NULL) {
         fprintf(stderr, "Failed to initialize external storage: %s\n",

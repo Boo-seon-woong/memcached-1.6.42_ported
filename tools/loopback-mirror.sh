@@ -45,7 +45,7 @@ start_client() {     # $1 ext_threads  $2 memcached worker threads
   sleep 2
   (setsid env EXT_RDMA_PROF=1 EXT_CRYPTO_KEY="$R/.ext.key" EXT_SLOT_SIZE=256 \
      "$R/memcached" -p "$PORT" -U 0 -m "$MEMLIMIT" -t "$2" \
-     -o "ext_path=10.99.0.2:$GPORT:4g,ext_item_size=2,ext_threads=$1" \
+     -o "ext_path=10.99.0.2:$GPORT:4g,ext_threads=$1" \
      > "$SP/mc_mirror.log" 2>&1 &)
   for i in $(seq 1 30); do ss -lnt | grep -q ":$PORT" && return 0; sleep 1; done
   echo "  client failed to start:"; tail -3 "$SP/mc_mirror.log"; return 1

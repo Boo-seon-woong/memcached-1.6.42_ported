@@ -144,8 +144,8 @@ memcached-slabs_mover.o: slabs_mover.c /usr/include/stdc-predef.h \
  /usr/include/x86_64-linux-gnu/bits/xopen_lim.h itoa_ljust.h \
  slabs_mover.h protocol_binary.h cache.h queue.h logger.h bipbuffer.h \
  util.h crc32c.h sasl_defs.h stats_prefix.h slabs.h assoc.h items.h \
- crawler.h trace.h hash.h slab_automove.h slab_automove_extstore.h \
- storage.h /usr/include/x86_64-linux-gnu/sys/mman.h \
+ crawler.h trace.h hash.h slab_automove.h storage.h \
+ /usr/include/x86_64-linux-gnu/sys/mman.h \
  /usr/include/x86_64-linux-gnu/bits/mman.h \
  /usr/include/x86_64-linux-gnu/bits/mman-map-flags-generic.h \
  /usr/include/x86_64-linux-gnu/bits/mman-linux.h \
@@ -362,7 +362,6 @@ crawler.h:
 trace.h:
 hash.h:
 slab_automove.h:
-slab_automove_extstore.h:
 storage.h:
 /usr/include/x86_64-linux-gnu/sys/mman.h:
 /usr/include/x86_64-linux-gnu/bits/mman.h:

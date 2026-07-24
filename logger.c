@@ -520,24 +520,6 @@ static const entry_details default_entries[] = {
     [LOGGER_DELETIONS] = {512, LOG_DELETIONS, _logger_log_item_deleted, _logger_parse_ide, NULL},
 #ifdef EXTSTORE
     [LOGGER_EXTSTORE_WRITE] = {512, LOG_EVICTIONS, _logger_log_ext_write, _logger_parse_extw, NULL},
-    [LOGGER_COMPACT_START] = {512, LOG_SYSEVENTS, _logger_log_text, _logger_parse_text,
-        "type=compact_start id=%lu version=%llu"
-    },
-    [LOGGER_COMPACT_ABORT] = {512, LOG_SYSEVENTS, _logger_log_text, _logger_parse_text,
-        "type=compact_abort id=%lu"
-    },
-    [LOGGER_COMPACT_READ_START] = {512, LOG_SYSEVENTS, _logger_log_text, _logger_parse_text,
-        "type=compact_read_start id=%lu offset=%llu"
-    },
-    [LOGGER_COMPACT_READ_END] = {512, LOG_SYSEVENTS, _logger_log_text, _logger_parse_text,
-        "type=compact_read_end id=%lu offset=%llu rescues=%lu rescues_realloc=%lu lost=%lu lost_oom=%lu skipped=%lu"
-    },
-    [LOGGER_COMPACT_END] = {512, LOG_SYSEVENTS, _logger_log_text, _logger_parse_text,
-        "type=compact_end id=%lu"
-    },
-    [LOGGER_COMPACT_FRAGINFO] = {512, LOG_SYSEVENTS, _logger_log_text, _logger_parse_text,
-        "type=compact_fraginfo ratio=%.2f bytes=%lu"
-    },
 #endif
 #ifdef PROXY
     [LOGGER_PROXY_CONFIG] = {512, LOG_PROXYEVENTS, _logger_log_text, _logger_parse_text,

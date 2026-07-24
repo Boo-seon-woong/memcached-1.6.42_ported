@@ -912,13 +912,6 @@ static void process_slabs_automove_command(conn *c, mcp_parser_t *pr) {
         // TODO: settings needs an overhaul... no locks/etc.
         settings.slab_automove_ratio = ratio;
         settings.slab_automove_version++;
-    } else if (strncmp(subcmd, "freeratio", len) == 0) {
-        if (ntokens < 4 || !mc_toktod(pr, 3, &ratio)) {
-            out_string(c, "ERROR");
-            return;
-        }
-        settings.slab_automove_freeratio = ratio;
-        settings.slab_automove_version++;
     } else if (strncmp(subcmd, "window", len) == 0) {
         if (ntokens < 4 || mcmc_token_get_u32(pr->request, &pr->tok, 3, &level) != MCMC_OK) {
             out_string(c, "CLIENT_ERROR bad command line format");
@@ -1094,73 +1087,6 @@ static void process_lru_command(conn *c, mcp_parser_t *pr) {
         out_string(c, "ERROR");
     }
 }
-#ifdef EXTSTORE
-static void process_extstore_command(conn *c, mcp_parser_t *pr) {
-    bool ok = true;
-    int ntokens = pr->tok.ntokens;
-    int len = 0;
-    const char *subcmd = mcmc_token_get(pr->request, &pr->tok, SUBCOMMAND_TOKEN, &len);
-
-    if (ntokens < 3 || subcmd == NULL) {
-        ok = false;
-    } else if (strncmp(subcmd, "free_memchunks", len) == 0 && ntokens > 3) {
-        // setting is deprecated and ignored, but accepted for backcompat
-        unsigned int clsid = 0;
-        unsigned int limit = 0;
-        if (!mc_toktou32(pr, 2, &clsid) ||
-                !mc_toktou32(pr, 3, &limit)) {
-            ok = false;
-        } else {
-            if (clsid < MAX_NUMBER_OF_SLAB_CLASSES) {
-                ok = true;
-            } else {
-                ok = false;
-            }
-        }
-    } else if (strncmp(subcmd, "item_size", len) == 0) {
-        if (mc_toktou32(pr, 2, &settings.ext_item_size)) {
-            settings.slab_automove_version++;
-        } else {
-            ok = false;
-        }
-    } else if (strncmp(subcmd, "item_age", len) == 0) {
-        if (!mc_toktou32(pr, 2, &settings.ext_item_age))
-            ok = false;
-    } else if (strncmp(subcmd, "low_ttl", len) == 0) {
-        if (!mc_toktou32(pr, 2, &settings.ext_low_ttl))
-            ok = false;
-    } else if (strncmp(subcmd, "recache_rate", len) == 0) {
-        if (!mc_toktou32(pr, 2, &settings.ext_recache_rate))
-            ok = false;
-    } else if (strncmp(subcmd, "compact_under", len) == 0) {
-        if (!mc_toktou32(pr, 2, &settings.ext_compact_under))
-            ok = false;
-    } else if (strncmp(subcmd, "drop_under", len) == 0) {
-        if (!mc_toktou32(pr, 2, &settings.ext_drop_under))
-            ok = false;
-    } else if (strncmp(subcmd, "max_sleep", len) == 0) {
-        if (!mc_toktou32(pr, 2, &settings.ext_max_sleep))
-            ok = false;
-    } else if (strncmp(subcmd, "max_frag", len) == 0) {
-        if (!mc_toktod(pr, 2, &settings.ext_max_frag))
-            ok = false;
-    } else if (strncmp(subcmd, "drop_unread", len) == 0) {
-        unsigned int v;
-        if (!mc_toktou32(pr, 2, &v)) {
-            ok = false;
-        } else {
-            settings.ext_drop_unread = v == 0 ? false : true;
-        }
-    } else {
-        ok = false;
-    }
-    if (!ok) {
-        out_string(c, "ERROR");
-    } else {
-        out_string(c, "OK");
-    }
-}
-#endif
 static void process_flush_all_command(conn *c, mcp_parser_t *pr) {
     int32_t exptime = 0;
     rel_time_t new_oldest = 0;
@@ -1483,9 +1409,6 @@ enum text_cmds {
     text_cmd_lru_crawler,
     text_cmd_verbosity,
     text_cmd_lru,
-#ifdef EXTSTORE
-    text_cmd_extstore,
-#endif
 #ifdef TLS
     text_cmd_refresh_certs,
 #endif
@@ -1505,9 +1428,6 @@ static const struct text_cmd_entry text_cmd_entries[] = {
     [text_cmd_lru_crawler] = {"lru_crawler", process_lru_crawler_command},
     [text_cmd_verbosity] = {"verbosity", process_verbosity_command},
     [text_cmd_lru] = {"lru", process_lru_command},
-#ifdef EXTSTORE
-    [text_cmd_extstore] = {"extstore", process_extstore_command},
-#endif
 #ifdef TLS
     [text_cmd_refresh_certs] = {"refresh_certs", process_refresh_certs_command},
 #endif

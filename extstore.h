@@ -1,40 +1,26 @@
 #ifndef EXTSTORE_H
 #define EXTSTORE_H
 
-/* A safe-to-read dataset for determining compaction.
- * id is the array index.
- */
+/* A safe-to-read remote page snapshot. The array index is the page id. */
 struct extstore_page_data {
     uint64_t version;
     uint64_t bytes_used;
     unsigned int bucket;
-    unsigned int free_bucket;
     bool active; // page is actively being written to; ignore it except for tallying.
 };
 
-/* Pages can have objects deleted from them at any time. This creates holes
- * that can't be reused until the page is either evicted or all objects are
- * deleted.
- * bytes_fragmented is the total bytes for all of these holes.
- * It is the size of all used pages minus each page's bytes_used value.
- */
 struct extstore_stats {
     uint64_t page_allocs;
     uint64_t page_count; /* total page count */
-    uint64_t page_evictions;
-    uint64_t page_reclaims;
     uint64_t page_size; /* size in bytes per page (supplied by caller) */
     uint64_t pages_free; /* currently unallocated/unused pages */
     uint64_t pages_used;
-    uint64_t objects_evicted;
     uint64_t objects_read;
     uint64_t objects_written;
     uint64_t objects_used; /* total number of objects stored */
-    uint64_t bytes_evicted;
     uint64_t bytes_written;
     uint64_t bytes_read; /* wbuf - read -> bytes read from storage */
     uint64_t bytes_used; /* total number of bytes stored */
-    uint64_t bytes_fragmented; /* see above comment */
     uint64_t io_queue;
     /* RDMA bring-up debug counters */
     uint64_t write_failures;   /* RDMA WRITE completions with error status */
@@ -57,9 +43,6 @@ struct extstore_conf {
     unsigned int page_size; // ideally 64-256M in size
     unsigned int page_count;
     unsigned int page_buckets; // number of size-class buckets for remote slots
-    unsigned int free_page_buckets; // (unused; kept for storage.c compatibility)
-    unsigned int wbuf_size;    // (unused)
-    unsigned int wbuf_count;   // (unused)
     unsigned int io_threadcount; // = number of RDMA QPs
     unsigned int io_depth;     // max outstanding RDMA ops per IO thread
     // RDMA port additions:
@@ -70,13 +53,9 @@ struct extstore_conf {
 
 struct extstore_conf_file {
     unsigned int page_count;
-    char *file;                // genie host (RDMA port) / file path (legacy)
-    int cport;                 // genie control-channel TCP port (RDMA port)
-    int fd; // internal usage
-    uint64_t offset; // internal usage
+    char *file;                // genie host
+    int cport;                 // genie control-channel TCP port
     uint64_t total_size; // size in bytes, before page_count slicing
-    unsigned int bucket; // free page bucket
-    unsigned int free_bucket; // specialized free bucket
     struct extstore_conf_file *next;
 };
 
@@ -118,12 +97,7 @@ struct ext_loc {
 };
 
 enum extstore_res {
-    EXTSTORE_INIT_BAD_WBUF_SIZE = 1,
-    EXTSTORE_INIT_NEED_MORE_WBUF,
-    EXTSTORE_INIT_NEED_MORE_BUCKETS,
-    EXTSTORE_INIT_PAGE_WBUF_ALIGNMENT,
-    EXTSTORE_INIT_TOO_MANY_PAGES,
-    EXTSTORE_INIT_OOM,
+    EXTSTORE_INIT_OOM = 1,
     EXTSTORE_INIT_OPEN_FAIL,
     EXTSTORE_INIT_THREAD_FAIL,
     EXTSTORE_INIT_SELFTEST_FAIL

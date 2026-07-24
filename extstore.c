@@ -144,11 +144,6 @@ struct store_engine {
     struct ibv_pd *pd;
     struct ibv_mr *bounce_mr, *staging_mr;
     uint64_t raddr; uint32_t rkey;       /* genie MR */
-    /* ponytail: local test backend — remote memory is a local buffer, RDMA is
-     * memcpy. Lets the full flush/read/crypto path run under memtier without
-     * genie/RDMA (ext_path=local:0:<size>). Not a shipping path. */
-    bool local;
-    char *local_mem;
     store_page *pages;
     store_page **page_buckets;           /* active page per bucket */
     store_page *free_pages;              /* stack of unused pages */
@@ -163,6 +158,7 @@ struct store_engine {
     char *staging_base;
     char **staging_free; int staging_top; unsigned int staging_count;
     pthread_mutex_t staging_mutex;
+    pthread_cond_t staging_cond;
     atomic_uint_fast64_t dead;           /* QP error -> fail-fast */
     pthread_mutex_t mutex;               /* pages / buckets / freeloc */
     struct extstore_stats stats;
@@ -269,24 +265,6 @@ static void *extstore_io_thread(void *arg) {
         while (!t->queue && !t->outstanding)
             pthread_cond_wait(&t->cond, &t->mutex);
 
-        if (e->local) {   /* memcpy transport (no RDMA); remote == local_mem */
-            obj_io *batch = t->queue; t->queue = t->queue_tail = NULL;
-            pthread_mutex_unlock(&t->mutex);
-            unsigned int reads = 0, writes = 0; uint64_t rb = 0, wb = 0;
-            while (batch) {
-                obj_io *io = batch; batch = io->next;
-                char *rem = e->local_mem + e->pages[io->page_id].remote_off + io->offset;
-                if (io->mode == OBJ_IO_READ) { io->buf = rem; reads++; rb += io->len; }
-                else { memcpy(rem, io->buf, io->len); writes++; wb += io->len; }
-                io->cb(e, io, (int)io->len);
-            }
-            STAT_L(e);
-            e->stats.objects_read += reads;   e->stats.bytes_read += rb;
-            e->stats.objects_written += writes; e->stats.bytes_written += wb;
-            STAT_UL(e);
-            continue;
-        }
-
         int n = 0;
         while (t->queue && t->outstanding + n < depth && n < (int)g_batch_limit) {
             obj_io *io = t->queue;
@@ -355,6 +333,9 @@ static void *extstore_io_thread(void *arg) {
             }
             if (ibv_post_send(t->qp, &wrs[0], &bad)) {
                 atomic_store(&e->dead, 1);
+                pthread_mutex_lock(&e->staging_mutex);
+                pthread_cond_broadcast(&e->staging_cond);
+                pthread_mutex_unlock(&e->staging_mutex);
                 STAT_L(e); e->stats.engine_dead = 1; STAT_UL(e);
                 for (int i = 0; i < n; i++) {
                     obj_io *io = (obj_io *)(uintptr_t)wrs[i].wr_id;
@@ -421,6 +402,9 @@ static void *extstore_io_thread(void *arg) {
             char *buf = io->buf;
             if (!ok) {
                 atomic_store(&e->dead, 1);
+                pthread_mutex_lock(&e->staging_mutex);
+                pthread_cond_broadcast(&e->staging_cond);
+                pthread_mutex_unlock(&e->staging_mutex);
                 STAT_L(e);
                 e->stats.engine_dead = 1;
                 if (is_read) e->stats.read_failures++;
@@ -540,36 +524,13 @@ void *extstore_init(struct extstore_conf_file *fh, struct extstore_conf *cf,
     pthread_mutex_init(&e->mutex, NULL);
     pthread_mutex_init(&e->stats_mutex, NULL);
     pthread_mutex_init(&e->staging_mutex, NULL);
+    pthread_cond_init(&e->staging_cond, NULL);
     atomic_store(&e->dead, 0);
-    e->local = (fh->file && strcmp(fh->file, "local") == 0);
 
     if (getenv("EXT_RDMA_PROF")) { g_prof_on = 1; prof_calibrate(); }
     { const char *b = getenv("EXT_WRITE_BATCH");
       if (b) { unsigned v = (unsigned)strtoul(b, NULL, 10);
                if (v >= 1 && v <= 32) g_batch_limit = v; } }
-
-    if (e->local) {
-        /* local test backend: remote memory + staging are plain buffers */
-        uint64_t rsize = fh->total_size;
-        e->local_mem = calloc(1, rsize);
-        e->staging_count = cf->write_slots ? cf->write_slots : 256;
-        e->staging_base = calloc(e->staging_count, e->slot_size);
-        if (!e->local_mem || !e->staging_base) { *res = EXTSTORE_INIT_OOM; goto fail; }
-        e->staging_free = malloc(sizeof(char *) * e->staging_count);
-        for (unsigned int i = 0; i < e->staging_count; i++)
-            e->staging_free[i] = e->staging_base + (size_t)i * e->slot_size;
-        e->staging_top = e->staging_count;
-        e->page_count = rsize / e->page_size;
-        if (e->page_count == 0) { *res = EXTSTORE_INIT_OPEN_FAIL; goto fail; }
-        e->io_threads = calloc(e->io_threadcount, sizeof(store_iothr));
-        for (unsigned int i = 0; i < e->io_threadcount; i++) {
-            store_iothr *t = &e->io_threads[i];
-            t->e = e;
-            pthread_mutex_init(&t->mutex, NULL);
-            pthread_cond_init(&t->cond, NULL);
-        }
-        goto pages_setup;
-    }
 
     /* read-bounce + write-staging pools (SEV: shared memory; §9). Registration
      * happens after we have a pd from the connection. */
@@ -615,7 +576,6 @@ void *extstore_init(struct extstore_conf_file *fh, struct extstore_conf *cf,
     /* pages carve the remote MR */
     e->page_count = rsize / e->page_size;
     if (e->page_count == 0) { *res = EXTSTORE_INIT_OPEN_FAIL; goto fail; }
-pages_setup:
     e->page_bucketcount = cf->page_buckets ? cf->page_buckets : 1;
     e->pages = calloc(e->page_count, sizeof(store_page));
     for (unsigned int i = 0; i < e->page_count; i++) {
@@ -674,6 +634,13 @@ int extstore_alloc(void *ptr, unsigned int len, unsigned int bucket, struct ext_
     if (fs->top > 0 && fs->arr[fs->top-1].len >= len) {
         *out = fs->arr[--fs->top];
         out->len = len;
+        store_page *p = &e->pages[out->page_id];
+        pthread_mutex_lock(&p->mutex);
+        p->obj_count++;
+        p->bytes_used += len;
+        pthread_mutex_unlock(&p->mutex);
+        e->stats.bytes_used += len;
+        e->stats.objects_used++;
         pthread_mutex_unlock(&e->mutex);
         return 0;
     }
@@ -728,6 +695,8 @@ int extstore_submit(void *ptr, obj_io *io) {
 char *extstore_staging_get(void *ptr) {
     store_engine *e = ptr;
     pthread_mutex_lock(&e->staging_mutex);
+    while (e->staging_top == 0 && !atomic_load(&e->dead))
+        pthread_cond_wait(&e->staging_cond, &e->staging_mutex);
     char *s = e->staging_top ? e->staging_free[--e->staging_top] : NULL;
     pthread_mutex_unlock(&e->staging_mutex);
     return s;
@@ -736,6 +705,7 @@ void extstore_staging_put(void *ptr, char *slot) {
     store_engine *e = ptr;
     pthread_mutex_lock(&e->staging_mutex);
     e->staging_free[e->staging_top++] = slot;
+    pthread_cond_signal(&e->staging_cond);
     pthread_mutex_unlock(&e->staging_mutex);
 }
 
