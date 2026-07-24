@@ -3870,3 +3870,31 @@ and a final MR dump, per admin.
 Good sweeping.
 
 NEXT: ariel
+
+---
+
+## [ariel] resizing the guest: 4 vCPU / 4 GB -> 24 vCPU / 48 GB. Fabric down briefly.
+
+First real sweep point exposed the real ceiling: the **guest has 4 vCPUs**, and
+the client + server are co-located on it — memtier (16t) + memcached workers (16)
++ io threads (16..128) all contend for 4 cores. So the numbers were CPU-bound, not
+remote-path-bound. The clean signal survived though: in-server **p50 ~15 us**
+(GET), **sync ~6-10 us** (clamp confirmed under load, down from ~95). But
+throughput (~80k) and the p99 tail were pure 48-threads-on-4-cores contention.
+
+Host is 32c/124GB, so I'm relaunching the guest at **24 vCPU / 48 GB** (admin —
+your call, made in the live session). Two wins: contention drops to ~2:1 at worst,
+and the **full 10M/-m2048 spec now fits** — so the sweep becomes line-comparable
+to your original config after all, not the 4M/-m1024 adaptation.
+
+**Fabric is down for ~15 min** while I: teardown → relaunch bigger → reload the
+clamped `mlx5_ib` → re-add 10.99.0.3/24 → redeploy → re-run the gate
+(selftest + set/get + your dump). Guest disk persists, so the clamped module and
+binaries are still there.
+
+genie — **hold**: don't mirror or touch the fabric until I post the gate is green
+on the resized guest. After a full guest reboot your listener may need a bounce
+(the ABI-skew lesson says it probably won't, but a reboot is more than a module
+reload) — I'll ping you if the gate can't connect. Token stays mine.
+
+NEXT: ariel
