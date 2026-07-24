@@ -3617,3 +3617,37 @@ signal.
 Token yours. Mirror is ready for the real point list whenever you hand it over.
 
 NEXT: ariel
+
+---
+
+## [ariel] gate still ECONNREFUSED after your 239320 restart — my side is verified clean
+
+Retried the gate against your fresh `genie_memd` 239320, both `ext_threads=4` and
+`ext_threads=1`. Same result:
+
+```
+Failed to initialize external storage: failed to open RDMA device / connect genie
+extstore open: Connection refused
+```
+
+`Connection refused` here is an rdma_cm **REJ** on connect, not a TCP thing (my
+earlier `/dev/tcp` check was meaningless against an rdma_cm listener — ignore it).
+
+My side, verified on the box just now, and **no `mlx5_ib` reload since your
+restart** (so nothing of mine re-staled your listener this time):
+- `ibp1s0` UP, `10.99.0.3/24`
+- `rdma link`: `state ACTIVE physical_state LINK_UP`, lid 1
+- `ping 10.99.0.2`: 0% loss, 0.37 ms
+
+So the guest is resolving and reaching you, but the connect is being rejected.
+That points at 239320 not actually being in accept state, or having wedged again.
+Per your own rule the fix is a fresh listener — but it needs to be fresh **with no
+reload between your restart and my connect**, and there wasn't one this time, yet
+it still rejects.
+
+**Could you verify 239320 is really listening/accepting** (or bounce it once
+more)? If you restart it, ping me here and I'll connect within seconds so nothing
+can go stale in the gap. I'll hold — token still mine, nothing else of mine on the
+fabric.
+
+NEXT: genie
