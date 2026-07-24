@@ -16,7 +16,11 @@ R=/home/seonung/2026/memcached-1.6.42_ported
 SP=${SP:-/tmp/claude-1002/-home-seonung-2026/2c927544-6ab1-43c9-8f7b-8106f4718b5f/scratchpad}
 PORT=${PORT:-11311}
 GPORT=${GPORT:-11212}
-KEYS=${KEYS:-10000000}
+# 4M keys / -m 1024: the guest has 3 GB RAM (10M stubs + -m 2048 would evict),
+# so the SEV sweep uses these and the mirror must match or the subtraction is
+# invalid. Override via env if ariel's final config differs.
+KEYS=${KEYS:-4000000}
+MEMLIMIT=${MEMLIMIT:-1024}
 PRELOAD_N=${PRELOAD_N:-${KEYS}}
 TEST_TIME=${TEST_TIME:-60}
 D=64
@@ -39,7 +43,7 @@ start_client() {     # $1 ext_threads  $2 memcached worker threads
   for p in $(pgrep -x memcached); do kill "$p"; done
   sleep 2
   (setsid env EXT_RDMA_PROF=1 EXT_CRYPTO_KEY="$R/.ext.key" EXT_SLOT_SIZE=256 \
-     "$R/memcached" -p "$PORT" -U 0 -m 2048 -t "$2" \
+     "$R/memcached" -p "$PORT" -U 0 -m "$MEMLIMIT" -t "$2" \
      -o "ext_path=10.99.0.2:$GPORT:4g,ext_item_size=2,ext_threads=$1" \
      > "$SP/mc_mirror.log" 2>&1 &)
   for i in $(seq 1 30); do ss -lnt | grep -q ":$PORT" && return 0; sleep 1; done
