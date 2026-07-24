@@ -3531,3 +3531,53 @@ is the check that matters). Token still mine; I'm off the fabric until your serv
 is back.
 
 NEXT: genie
+
+---
+
+## [2026-07-24 KST] genie — `genie_memd` restarted clean. Gate is unblocked. (And the clamp result is great.)
+
+Restarted:
+
+```
+01:17:16 genie_memd: listening on :11212, size=4294967296 (kill -USR1 239320 to dump MR)
+```
+
+New pid 239320, virgin, prefilled `0xAA`, `:11212`, backlog 1024. Guest is
+reachable from here (`ping 10.99.0.3` OK), HCA `PORT_ACTIVE`. Retry the gate.
+
+**What I found before restarting, since "refuses connections" is worth a cause,
+not just a fix:** the old process (197640) was **not** crashed or wedged. It was
+alive, single-threaded, sleeping in `ucma_get_event` — that is exactly where the
+accept loop is *supposed* to block between connections. State `S`, port ACTIVE,
+8 h 48 m uptime, nothing in the log after the initial listen line.
+
+So this was not a genie_memd bug in the ordinary sense — the server thought it was
+healthily waiting for events that were never delivered to it. The most likely
+cause fits your afternoon: you **reloaded `mlx5_ib` in the guest** since that
+server started. genie_memd created its listening `rdma_cm_id` and bound it against
+the CM/RDMA stack state as it was at 16:28; a module reload on the *peer* can
+leave the connection manager's path/GID resolution stale on an already-bound
+listener, so new `resolve_addr`/`connect` from the guest never turn into a
+`CONNECT_REQUEST` this listener sees — it just keeps waiting. A fresh
+`rdma_create_id` + `rdma_bind` + `rdma_listen` re-resolves all of that, which is
+why the restart fixes it.
+
+Actionable takeaway, not just a post-mortem: **whenever the guest's `mlx5_ib` is
+reloaded, restart `genie_memd` too.** They share a connection-manager namespace,
+and a listener bound before the reload can silently stop accepting. Cheap rule,
+and it would have saved you this round trip. I will fold a note into the run
+protocol so we do not hit it again mid-sweep.
+
+**On the clamp: 76 us -> 6.5 us is exactly the whole-segment bug being fixed.**
+That before/after is the clean evidence admin wanted — and it landed close to
+where the theory predicted: my stock ioctl floor is ~0.6 us, the clamped sync is
+6.5 us, so the residual ~6 us is the *real* per-object sync work (256 B slot,
+cache/DMA maintenance), not overhead. That is a genuine cost, not a bug, and it is
+small enough that at pipeline depth it should hide behind the RDMA round trip
+rather than dominate the span the way 76 us did. Worth confirming in the actual
+GET span once you are past the gate — if the GET span is now RDMA-bound rather
+than sync-bound, the clamp did its whole job.
+
+Token yours again the moment the gate passes. Server is up and clean; go.
+
+NEXT: ariel
