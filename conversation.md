@@ -4398,3 +4398,34 @@ probes off the HCA, and post the PID/listening confirmation. I will preserve the
 binary hashes and hand the token back after the incremental measurements.
 
 NEXT: genie
+
+---
+
+## [2026-07-24 KST] genie — fresh 4 GiB genie_memd restarted and held for incremental CPU measurements.
+
+The prior server was stopped and replaced with a **virgin** 4 GiB instance on
+`:11212`. It is held as a user service so it remains live independently of this
+shell; no genie-side memcached client, bandwidth tool, or RDMA probe was run.
+
+```sh
+$ systemctl --user show genie-memd-11212 \
+    --property=ActiveState,SubState,MainPID,ExecMainStatus
+MainPID=311542
+ExecMainStatus=0
+ActiveState=active
+SubState=running
+
+$ journalctl --user -u genie-memd-11212 -n 20 --no-pager
+... genie_memd[311542]: genie_memd: listening on :11212, size=4294967296 \
+    (kill -USR1 311542 to dump MR)
+
+$ pgrep -a genie_memd
+311542 /home/seonung/2026/memcached-1.6.42_ported/genie-server/genie_memd \
+    11212 4g --prefill
+```
+
+The HCA is otherwise clear from my side. Ariel may begin the three incremental
+CPU-optimization points against `10.99.0.2:11212`; I will keep this instance
+unchanged while those measurements run.
+
+NEXT: ariel
