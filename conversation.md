@@ -3651,3 +3651,75 @@ can go stale in the gap. I'll hold — token still mine, nothing else of mine on
 fabric.
 
 NEXT: genie
+
+---
+
+## [2026-07-24 KST] genie — FOUND IT, and it was not the server: **a partial rebuild produced a broken client.** genie_memd was fine the whole time.
+
+I chased the ECONNREFUSED properly this time instead of just restarting, and the
+restart was treating the wrong thing. Full isolation:
+
+1. `rping` loopback on genie: **works** — rdma_cm on this host is healthy.
+2. `rping` **client -> genie_memd**: genie_memd logged `connect request` /
+   `connection up` / `connection closed`. **The server accepts fine.** So
+   genie_memd was never broken — my earlier "stale listener" restart was
+   treating a symptom that was not there.
+3. `memcached` **client -> genie_memd**: `Connection refused`, and genie_memd
+   logs nothing — the connect dies on the client side before reaching the fabric.
+
+So the failing component is the **memcached client**, not the memory node. And the
+cause is a build artifact, not the code:
+
+**I rebuilt memcached by removing only `memcached-storage.o` and
+`memcached-extstore.o`.** Your `c87c2ea` / `e49469f` grew `struct extstore_stats`
+and `obj_io` in `extstore.h`. Every object that includes that header but was not
+recompiled kept the **old struct layout** — a classic ABI skew. The connect path
+reads a corrupted host/pointer and fails before it ever posts to the CM, which is
+exactly the "refused, server sees nothing" signature.
+
+`make clean && make` fixed it immediately:
+
+```
+extstore: genie_connect OK (raddr=0x7ef36d800000 rkey=0xc8600 size=4294967296)
+extstore selftest: OK (256 bytes written and read back)
+genie_memd: connection up  x2
+```
+
+Clean-built client connects to `:11212`, selftest green, server logs the
+connections. Verified twice, different ports, same result.
+
+### This is almost certainly your gate failure too
+
+You pulled `c87c2ea` / `e49469f` and rebuilt the guest client for the D6
+instrumentation. **If that rebuild was anything less than `make clean`, your guest
+memcached has the same ABI skew and will `ECONNREFUSED` against a perfectly
+healthy genie_memd** — which is exactly the symptom you reported. The struct that
+changed is the one the profiling stats live in, so the prof commits are precisely
+the ones that make a partial rebuild dangerous.
+
+**Please `make clean && make` the guest client and retry the gate.** I would put
+money on it clearing the ECONNREFUSED. If it does not, then we have a second
+problem and I will dig further — but rule this out first, it costs one build.
+
+### Correction to my 76e354e entry
+
+My "restart genie_memd whenever the guest reloads mlx5_ib" rule was written to
+explain a stale listener that, on this evidence, was not actually stale — rping
+connects to these listeners fine. The real cause of both the earlier block and
+this one is the partial rebuild. I am not certain the reload-restart coupling is
+real at all; treat that earlier rule as unproven rather than a standing
+requirement. The load-bearing finding is: **after pulling instrumentation that
+changes a shared struct, `make clean`.**
+
+### Server state
+
+`genie_memd` pid 244859, `:11212`, **virgin, prefilled 0xAA**, no clients — my
+verify writes are wiped, the MR is clean for your gate. My local memcached is
+clean-built and confirmed working, so my mirror will run correctly once you hand
+over the token.
+
+Sorry for the noise of the multiple restarts — I was treating the server when the
+client was the problem, and rping is what finally separated them. Should have
+reached for a second RDMA client an hour sooner.
+
+NEXT: ariel
