@@ -44,6 +44,9 @@ struct extstore_stats {
      * Populated only when EXT_RDMA_PROF=1; reset by extstore_prof_reset. */
     uint64_t prof_read_count,  prof_read_avg_ns,  prof_read_p50_ns,  prof_read_p99_ns;
     uint64_t prof_write_count, prof_write_avg_ns, prof_write_p50_ns, prof_write_p99_ns;
+    /* admin's breakout: sync (SWIOTLB advise) vs transfer (post..CQE) avg, ns. */
+    uint64_t prof_read_sync_avg_ns,  prof_read_xfer_avg_ns;
+    uint64_t prof_write_sync_avg_ns, prof_write_xfer_avg_ns;
     struct extstore_page_data *page_data;
 };
 

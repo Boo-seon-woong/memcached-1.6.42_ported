@@ -195,6 +195,11 @@ void storage_stats(ADD_STAT add_stats, void *c) {
         APPEND_STAT("extstore_prof_write_avg_ns", "%llu", (unsigned long long)st.prof_write_avg_ns);
         APPEND_STAT("extstore_prof_write_p50_ns", "%llu", (unsigned long long)st.prof_write_p50_ns);
         APPEND_STAT("extstore_prof_write_p99_ns", "%llu", (unsigned long long)st.prof_write_p99_ns);
+        // breakout: sync (SWIOTLB advise) vs transfer (post..CQE), avg ns.
+        APPEND_STAT("extstore_prof_read_sync_avg_ns", "%llu", (unsigned long long)st.prof_read_sync_avg_ns);
+        APPEND_STAT("extstore_prof_read_xfer_avg_ns", "%llu", (unsigned long long)st.prof_read_xfer_avg_ns);
+        APPEND_STAT("extstore_prof_write_sync_avg_ns", "%llu", (unsigned long long)st.prof_write_sync_avg_ns);
+        APPEND_STAT("extstore_prof_write_xfer_avg_ns", "%llu", (unsigned long long)st.prof_write_xfer_avg_ns);
     }
 
 }

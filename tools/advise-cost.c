@@ -11,6 +11,10 @@
 #include <stdlib.h>
 #include <string.h>
 #include <time.h>
+#include <errno.h>
+#include <fcntl.h>
+#include <unistd.h>
+#include <sys/mman.h>
 #include <infiniband/verbs.h>
 
 #ifndef IBV_ADVISE_MR_ADVICE_SYNC_FOR_CPU
@@ -34,13 +38,27 @@ int main(int argc, char **argv) {
     struct ibv_pd *pd = ibv_alloc_pd(ctx);
     if (!pd) { fprintf(stderr, "alloc_pd failed\n"); return 1; }
 
-    size_t bufsz = slot * 64;
-    char *buf = aligned_alloc(4096, bufsz);
+    /* argv[2]=snp -> allocate from /dev/snp_shared (uncached, like the engine's
+     * bounce/staging), which is where the 95us sync cost actually lives. argv[3]
+     * = slot count (default 64) so the MR size can be swept too. */
+    int use_snp = argc > 2 && strcmp(argv[2], "snp") == 0;
+    int slots = argc > 3 ? atoi(argv[3]) : 64;
+    size_t bufsz = slot * slots;
+    char *buf;
+    if (use_snp) {
+        int fd = open("/dev/snp_shared", O_RDWR);
+        if (fd < 0) { fprintf(stderr, "snp_shared open failed: %s\n", strerror(errno)); return 1; }
+        buf = mmap(NULL, bufsz, PROT_READ|PROT_WRITE, MAP_SHARED, fd, 0);
+        if (buf == MAP_FAILED) { fprintf(stderr, "snp_shared mmap failed\n"); return 1; }
+    } else {
+        buf = aligned_alloc(4096, bufsz);
+    }
     memset(buf, 0, bufsz);
     struct ibv_mr *mr = ibv_reg_mr(pd, buf, bufsz, IBV_ACCESS_LOCAL_WRITE);
     if (!mr) { fprintf(stderr, "reg_mr failed\n"); return 1; }
 
-    printf("device=%s iters=%d\n", ibv_get_device_name(list[0]), iters);
+    printf("device=%s iters=%d mem=%s bufsz=%zuB\n", ibv_get_device_name(list[0]),
+           iters, use_snp ? "snp_shared" : "regular", bufsz);
 
     /* sweep the sge count: tells us whether cost is per-call or per-object,
      * which decides whether batching more objects per advise would help. */

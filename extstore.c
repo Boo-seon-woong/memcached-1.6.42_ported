@@ -135,6 +135,8 @@ typedef struct {
      * PROF_BUCKETS x PROF_BUCKET_NS covers 0..~102us; bucket = ns/100 clamped. */
     uint64_t prof_r_count, prof_w_count, prof_r_sum_ns, prof_w_sum_ns;
     uint32_t prof_r_hist[8192], prof_w_hist[8192];
+    /* admin's breakout: sync (advise) vs transfer (post..CQE) portion, ns sums. */
+    uint64_t prof_r_sync_ns, prof_r_xfer_ns, prof_w_sync_ns, prof_w_xfer_ns;
 } store_iothr;
 
 struct store_engine {
@@ -336,6 +338,14 @@ static void *extstore_io_thread(void *arg) {
                     fprintf(stderr, "extstore: ibv_advise_mr(SYNC_FOR_DEVICE) failed: %s"
                             " — writes may transmit pre-DMA contents\n", strerror(adv));
             }
+            /* per-write t_end = SYNC_FOR_DEVICE done: splits WRITE span into
+             * sync (t_end - t_start) and transfer (CQE - t_end). */
+            if (g_prof_on && nd) {
+                uint64_t ts = prof_rdtsc();
+                for (int i = 0; i < n; i++)
+                    if (wrs[i].opcode == IBV_WR_RDMA_WRITE)
+                        ((obj_io *)(uintptr_t)wrs[i].wr_id)->t_end = ts;
+            }
             /* READ span opens here — immediately before ibv_post_send (D6). */
             if (g_prof_on) {
                 uint64_t ts = prof_rdtsc();
@@ -391,12 +401,17 @@ static void *extstore_io_thread(void *arg) {
         for (int i = 0; i < c; i++) {
             obj_io *io = (obj_io *)(uintptr_t)wc[i].wr_id;
             if (g_prof_on && wc[i].status == IBV_WC_SUCCESS && io->t_start) {
-                if (io->mode == OBJ_IO_READ)
+                if (io->mode == OBJ_IO_READ) {
                     prof_record(t->prof_r_hist, &t->prof_r_count, &t->prof_r_sum_ns,
                                 t_sync_done - io->t_start);
-                else
+                    t->prof_r_xfer_ns += (uint64_t)((t_poll - io->t_start) * g_ns_per_cycle);
+                    t->prof_r_sync_ns += (uint64_t)((t_sync_done - t_poll) * g_ns_per_cycle);
+                } else {
                     prof_record(t->prof_w_hist, &t->prof_w_count, &t->prof_w_sum_ns,
                                 t_poll - io->t_start);
+                    t->prof_w_sync_ns += (uint64_t)((io->t_end - io->t_start) * g_ns_per_cycle);
+                    t->prof_w_xfer_ns += (uint64_t)((t_poll - io->t_end) * g_ns_per_cycle);
+                }
             }
             int ok = (wc[i].status == IBV_WC_SUCCESS);
             /* The callback owns io and may free it (storage_write_done_cb frees
@@ -788,6 +803,16 @@ void extstore_get_stats(void *ptr, struct extstore_stats *st) {
                        &st->prof_read_p50_ns, &st->prof_read_p99_ns);
         prof_summarize(e, 0, &st->prof_write_count, &st->prof_write_avg_ns,
                        &st->prof_write_p50_ns, &st->prof_write_p99_ns);
+        uint64_t rs = 0, rx = 0, ws = 0, wx = 0;
+        for (unsigned int i = 0; i < e->io_threadcount; i++) {
+            store_iothr *t = &e->io_threads[i];
+            rs += t->prof_r_sync_ns; rx += t->prof_r_xfer_ns;
+            ws += t->prof_w_sync_ns; wx += t->prof_w_xfer_ns;
+        }
+        st->prof_read_sync_avg_ns  = st->prof_read_count  ? rs / st->prof_read_count  : 0;
+        st->prof_read_xfer_avg_ns  = st->prof_read_count  ? rx / st->prof_read_count  : 0;
+        st->prof_write_sync_avg_ns = st->prof_write_count ? ws / st->prof_write_count : 0;
+        st->prof_write_xfer_avg_ns = st->prof_write_count ? wx / st->prof_write_count : 0;
     }
 }
 
@@ -796,6 +821,7 @@ void extstore_prof_reset(void *ptr) {
     for (unsigned int i = 0; i < e->io_threadcount; i++) {
         store_iothr *t = &e->io_threads[i];
         t->prof_r_count = t->prof_w_count = t->prof_r_sum_ns = t->prof_w_sum_ns = 0;
+        t->prof_r_sync_ns = t->prof_r_xfer_ns = t->prof_w_sync_ns = t->prof_w_xfer_ns = 0;
         memset(t->prof_r_hist, 0, sizeof(t->prof_r_hist));
         memset(t->prof_w_hist, 0, sizeof(t->prof_w_hist));
     }
