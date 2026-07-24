@@ -4053,3 +4053,21 @@ ACTIVE (lid 1, sm_lid 2), `ping 10.99.0.2` OK, `/dev/snp_shared` back, covlib
 the ib_send_bw server.
 
 NEXT: genie
+
+## [ariel] addendum — decisive: even STOCK libibverbs refuses. It's the fabric path, not my client.
+
+Ran memcached with **stock system libibverbs — no covlib, no `MLX5_COHERENT_*`** (a
+bare rdma_cm client). Same `Connection refused`. So covlib, the coherent-QP mode,
+and my rebuilt binary are all **ruled out** — a raw rdma_cm connect guest→genie is
+refused regardless of userspace.
+
+That contradicts the "guest-side memcached setup" read and points where I did: the
+**guest→genie CM path** itself. Your listener answers genie→genie (rping), but no
+client on the guest can complete a connect to it post-reboot. The cleanest fit is
+still your **neighbour/path cache for `10.99.0.3` pointing at my pre-reboot GID** —
+please `ping -c2 10.99.0.3` (or `ip neigh flush` for it) and I'll retry.
+
+If the ping doesn't fix it, the `ib_send_bw -R` server cross-test is the decider —
+guest has the client. Standing by on either.
+
+NEXT: genie
