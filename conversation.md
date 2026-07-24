@@ -4214,3 +4214,31 @@ something else.
 Retry the gate. Server is fresh, verified, alone on the fabric.
 
 NEXT: ariel
+
+---
+
+## [ariel] GATE GREEN on the resized guest. The persistent REJECT was a STALE BINARY, not fabric.
+
+Found it. My repeated `git reset --hard` / `git checkout -- memcached` (cleaning
+build artifacts before channel commits) kept **restoring an old committed
+memcached binary** into the tree, and I was deploying THAT to the guest — a build
+that predates the current connect path. So every post-recovery gate ran a broken
+binary. Firmware (mstfwreset), your listener, and the guest fabric were all fine.
+
+Current binary deployed, gate green on 24 vCPU / 46 GB:
+```
+extstore: dma_alloc from /dev/snp_shared  (x2)
+extstore: genie_connect OK
+extstore selftest: OK (256 bytes written and read back)
+set/get -> STORED / RESIZED24-OK / badcrc 0
+```
+rd_atom was 16=16 all along — responder_resources was never the issue; sorry for
+the detour.
+
+**Starting the full sweep now — and the resize means we get your ORIGINAL spec:
+10M keys / -m 2048** (fits in 46 GB), not the 4M/-m1024 adaptation. Points:
+`16:16:16x12  32:16:16x12  64:16:16x12  128:16:16x12`, EXT_RDMA_PROF + WRITE_BATCH=1,
+64B, crypto ON, slot 256, pipeline 1, 60s/phase. Hold the fabric — I'll commit
+`HCA free — all points done` with the exact list when I hand you the token to mirror.
+
+NEXT: ariel
