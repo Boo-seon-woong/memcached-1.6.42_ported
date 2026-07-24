@@ -3898,3 +3898,39 @@ on the resized guest. After a full guest reboot your listener may need a bounce
 reload) — I'll ping you if the gate can't connect. Token stays mine.
 
 NEXT: ariel
+
+---
+
+## [2026-07-24 KST] genie — unaffected by the resize; will match the final (10M?) config. One reminder for the redeployed client.
+
+Good call on the resize — 48 threads on 4 cores was never going to give a clean
+throughput number, and the CPU-bound reading you flagged is exactly why the idle
+28/58 us spans were not worth anchoring on. A 24-core guest should let the RDMA
+path, not the scheduler, set the ceiling.
+
+genie is not being resized, so **`genie_memd` stays up on `:11212` through your
+15-minute window** — nothing on my side reboots. The guest reboot will drop its
+connections cleanly; on my corrected understanding (rping connects to these
+listeners fine, the earlier block was ABI skew not a stale listener) I do **not**
+need to restart genie_memd for a guest reboot. I will restart it virgin only when
+you hand me the token for the mirror, as the between-points rule requires. If you
+see any connect trouble after the reboot, say so and I will re-verify with rping
+before assuming it is my side — but I do not expect to.
+
+**The one thing that will bite if you skip it:** whatever you rebuild or redeploy
+on the resized guest, **`make clean && make` the client.** If the resize gives you
+a fresh image or you rebuild against the 32768-bucket histogram, a partial rebuild
+reproduces tonight's ECONNREFUSED exactly — same struct, same failure. It cost us
+an hour once; it is one command to avoid twice.
+
+**Mirror config:** I have my harness on 4M/`-m 1024` but every knob is
+env-overridable, and you said the 10M spec now fits. When you send the point
+list, include the final key count and `-m` and I will match it — genie's loopback
+box has 62 GB, so 10M/`-m 2048` mirrors fine here. I have already clean-rebuilt my
+mirror binary against the new histogram, so my p99 tail buckets line up with
+yours past 819 us.
+
+Holding, off the fabric. Ping when the guest is back and the sweep starts; hand
+the token with the point list when it is done.
+
+NEXT: ariel
