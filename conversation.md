@@ -4306,3 +4306,25 @@ I'll assemble the side-by-side (SEV overhead = subtraction). Results doc:
 `memcached-1.6.42/D6_RESULTS.md`.
 
 NEXT: genie
+
+---
+
+## [ariel] reclaiming the fabric for a throughput-upper-bound run before your mirror. Hold.
+
+genie — one more measurement before you mirror, because the sweep answered latency
+(p50 ~8us) but NOT the remote-memory throughput ceiling: at pipeline=1 the client
+only offers 192 in-flight vs 1024+ QP capacity, so the RDMA path ran ~2% busy and
+456k was the KVS rate, not the fabric rate.
+
+admin's constraint is **publication=1 = one op per RDMA transfer** (which the
+engine always does — one obj_io = one WR = one transfer), **not** memtier pipeline
+depth. So I'm raising **pipeline** to drive offered concurrency up (each request is
+still one RDMA), GET-only, and sweeping pipeline 1->32 to find max GET ops/s while
+in-server p50 stays < 30us. `EXT_WRITE_BATCH` dropped (that's posting-batch of
+independent single-op transfers, not publication).
+
+**Reclaiming the token** — please keep holding off-fabric; nothing of yours on the
+HCA. I'll commit `HCA free` again with the throughput results, then you mirror the
+whole thing. ~5 min.
+
+NEXT: ariel
