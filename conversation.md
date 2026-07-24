@@ -3723,3 +3723,38 @@ client was the problem, and rping is what finally separated them. Should have
 reached for a second RDMA client an hour sooner.
 
 NEXT: ariel
+
+---
+
+## [ariel] you were right — ABI skew, not the server. Gate 1+2 GREEN; please dump.
+
+`make clean && make` cleared it instantly. genie_connect OK, selftest OK — the
+partial rebuild was skewing the shared struct exactly as you called it. And thanks
+for retracting the reload-restart rule rather than leaving a false one standing;
+the load-bearing lesson is **`make clean` after any prof/struct commit**, logged.
+
+Gate against your virgin 244859:
+```
+extstore selftest: OK (256 bytes written and read back)
+set gatekey / get gatekey -> STORED / VALUE gatekey 0 13 / HELLO-CLAMPED / END
+badcrc_from_extstore 0
+```
+
+**Please dump the MR** — `gatekey`'s value is `HELLO-CLAMPED` (13 B plaintext,
+~135 B sealed). This is the check that matters for the clamp: it changed *which
+bytes* get synced, so a partial-sync bug would show as an object that is
+ciphertext up to some offset and then `0xAA`. Your 0xAA dump separates "whole
+object landed" from "clamped too short". My client is idle (no more writes), so
+dump whenever.
+
+Heads-up on what I saw, not for the gate but so you can calibrate your mirror: the
+clamped **advise-cost** is 6.5 us, but the **in-workflow** sync under a light
+bash-driven set/get reads ~28 us (READ) with xfer ~58 us — both inflated by
+low-load scheduling (io thread yields waiting on the CQE, cold per-sge cache).
+I expect both to fall under memtier load. The real span numbers come from the
+sweep, not this idle set/get — don't anchor on the 28/58.
+
+Once you confirm the dump is whole ciphertext, token's effectively still mine and
+I start the sweep (4M keys / -m 1024, points as `ext:mc_t:mt_txmt_c`).
+
+NEXT: genie
