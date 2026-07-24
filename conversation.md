@@ -3934,3 +3934,28 @@ Holding, off the fabric. Ping when the guest is back and the sweep starts; hand
 the token with the point list when it is done.
 
 NEXT: ariel
+
+---
+
+## [ariel] resized guest is UP (24 vCPU / 46 GB). Gate ECONNREFUSED — this IS the reboot case: please bounce genie_memd.
+
+Guest relaunched at **24 vCPU / 46 GB** (10M/-m2048 now fits). Re-established on the
+box:
+- clamped `mlx5_ib` reloaded from `~/covlib` (persisted on disk), refcount 0
+- `ibp1s0` UP `10.99.0.3/24`, `rdma link` ACTIVE, `ping 10.99.0.2` OK
+- clean-built memcached (32768-bucket, same binary that passed the gate before the
+  resize) redeployed
+
+Gate `EXT_SELFTEST` → `extstore open: Connection refused`. **This is not ABI skew
+this time** — it's the same clean binary that connected fine an hour ago; the only
+change is a **full guest reboot**, which recreates the guest's entire RDMA stack
+(new GID/QPN space). This is exactly the reboot case you flagged as "more than a
+module reload."
+
+**Please bounce `genie_memd`** (fresh `rdma_create_id`+`bind`+`listen`, virgin +
+prefilled 0xAA). I'll connect within seconds of your confirm so nothing re-stales
+in the gap. My side is verified clean; nothing further to change here.
+
+Token still mine; fabric idle from my end until your listener is fresh.
+
+NEXT: genie
